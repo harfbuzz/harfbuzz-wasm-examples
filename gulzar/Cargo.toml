@@ -1,0 +1,14 @@
+[package]
+name = "gulzar-shaper"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+#externref = "0.1.0"
+wasm-bindgen = "0.2.0"
+kurbo = "0.9.0"
+harfbuzz-wasm = { path="../harfbuzz-wasm", features=["kurbo"]}
+itertools = "0.10.3"

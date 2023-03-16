@@ -1,0 +1,144 @@
+use crate::ast::Expr;
+use crate::ast;
+use crate::tokenizer;
+
+grammar;
+
+extern {
+    type Location = usize;
+    type Error = tokenizer::LexicalError;
+
+    enum tokenizer::Tok {
+        "SIGN" => tokenizer::Tok::Sign(_),
+        "HOR" => tokenizer::Tok::Hor,
+        "VERT" => tokenizer::Tok::Vert,
+        "ST" => tokenizer::Tok::St,
+        "SB" => tokenizer::Tok::Sb,
+        "ET" => tokenizer::Tok::Et,
+        "EB" => tokenizer::Tok::Eb,
+        "OVERLAY" => tokenizer::Tok::Overlay,
+        "BEGIN" => tokenizer::Tok::Begin,
+        "END" => tokenizer::Tok::End,
+        "OTHER" => tokenizer::Tok::Other(_),
+    }
+}
+
+pub Fragment: Vec<Box<Expr>> = { Group+ };
+
+Group: Box<Expr> = { HorizontalGroup, VerticalGroup, BasicGroup, Sign, Other };
+
+VerticalGroup: Box<Expr> = {
+    <l:VertSubGroup> <r: ("VERT" <VertSubGroup>)+> => ast::make_vertical_group(l, r)
+}
+
+BrVerticalGroup: Box<Expr> = {"BEGIN" <VerticalGroup> "END"}
+
+VertSubGroup: Box<Expr> = {
+    HorizontalGroup,
+    BasicGroup,
+    Sign
+};
+
+HorizontalGroup: Box<Expr> = {
+    <l:HorizontalGroupMember> <r:("HOR" <HorizontalGroupMember>)+> => ast::make_horizontal_group(l, r)
+}
+HorizontalGroupMember: Box<Expr> = { HorSubGroup, Sign }
+
+BrHorizontalGroup: Box<Expr> = {
+    "BEGIN" <HorizontalGroup> "END"
+}
+
+HorSubGroup: Box<Expr> = { BrVerticalGroup, BasicGroup };
+
+BasicGroup:  Box<Expr> = { CoreGroup, InsertionGroup };
+
+InsertionGroup: Box<Expr> = {
+    <l:InsertionGroupMember> "ST" <start_top:InSubgroup> <start_bottom:SbInsertion?> <end_top:EtInsertion?> <end_bottom:EbInsertion?> => {
+        Box::new(Expr::Insertion {
+            base: l,
+            start_top: Some(start_top),
+            start_bottom,
+            end_top,
+            end_bottom
+        })
+    },
+    <l:InsertionGroupMember> "SB" <start_bottom:InSubgroup> <end_top:EtInsertion?> <end_bottom:EbInsertion?> => {
+        Box::new(Expr::Insertion {
+            base: l,
+            start_top: None,
+            start_bottom: Some(start_bottom),
+            end_top,
+            end_bottom
+        })
+    },
+    <l:InsertionGroupMember> "ET" <end_top:InSubgroup> <end_bottom:EbInsertion?> => {
+        Box::new(Expr::Insertion {
+            base: l,
+            start_top: None,
+            start_bottom: None,
+            end_top: Some(end_top),
+            end_bottom
+        })
+    },
+    <l:InsertionGroupMember> "EB" <end_bottom:InSubgroup> => {
+        Box::new(Expr::Insertion {
+            base: l,
+            start_top: None,
+            start_bottom: None,
+            end_top: None,
+            end_bottom: Some(end_bottom)
+        })
+    }
+
+
+};
+
+InsertionGroupMember: Box<Expr> = { CoreGroup, Sign };
+
+BrInsertionGroup: Box<Expr> = {
+    "BEGIN" <InsertionGroup> "END"
+};
+
+CoreGroup: Box<Expr> = {
+    <l:FlatHorizontalGroup> "OVERLAY" <r:FlatVerticalGroup> => Box::new(Expr::Overlay(l,r))
+};
+
+EbInsertion : Box<Expr> = {"EB" <sg: InSubgroup> => <> }
+SbInsertion : Box<Expr> = {"SB" <sg: InSubgroup> => <> }
+EtInsertion : Box<Expr> = {"ET" <sg: InSubgroup> => <> }
+StInsertion : Box<Expr> = {"ST" <sg: InSubgroup> => <> }
+
+InSubgroup: Box<Expr> = {
+    BrVerticalGroup,
+    BrHorizontalGroup,
+    BrInsertionGroup,
+    CoreGroup,
+    Sign
+}
+
+FlatHorizontalGroup: Box<Expr> = {
+    BrFlatHorizontalGroup,
+    Sign
+};
+FlatVerticalGroup: Box<Expr> = {
+ BrFlatVerticalGroup,
+    Sign
+};
+
+BrFlatVerticalGroup : Box<Expr> = {
+    "BEGIN" <s:Sign> <r:("VERT" <Sign>)+> "END" => ast::make_vertical_group(s,r)
+}
+
+BrFlatHorizontalGroup : Box<Expr> = {
+    // This is the only bit which should work, but doesn't.
+    // "BEGIN" <s:Sign> <mut r:("HOR" <Sign>)+> "END" => {ast::make_horizontal_group(s,r) }
+    "BEGIN" <Sign> "END"
+}
+
+pub Sign: Box<Expr> = {
+    "SIGN" => Box::new(Expr::Sign(<>))
+};
+pub Other: Box<Expr> = {
+    "OTHER" => Box::new(Expr::Other(<>))
+};
+

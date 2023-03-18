@@ -1,6 +1,6 @@
 use crate::ast::Expr;
 use harfbuzz_wasm::{debug, Buffer, Font, Glyph, GlyphBuffer};
-use std::{arch::is_aarch64_feature_detected, collections::BTreeMap};
+use std::collections::BTreeMap;
 
 use lalrpop_util::lalrpop_mod;
 use wasm_bindgen::prelude::*;

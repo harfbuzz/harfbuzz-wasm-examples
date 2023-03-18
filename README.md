@@ -29,4 +29,32 @@ All this is done at run-time by specifying the desired positioning behaviour dir
 
 ![](gulzar/comparison.png)
 
+### hieroglyphs
 
+The encoding model of Egyptian hieroglyphics is unlike any other system in Unicode. It is based on the concept of repeated subdivisions of the "quadrat" (what typographers would think of as the em-square). For example, the following symbol found in the second text of Urkuden IV:
+
+![](hieroglyphs/example.png)
+
+is encoded as follows:
+
+![](hieroglyphs/example2.png)
+
+* Vertical subdivision of:
+    - Loaf of bread
+    - Top-right insertion of:
+        + Duck
+        + Horizontal subdivision
+            * Stroke
+            * Loaf of bread
+
+These "insertion" and "subdivision" characters are Unicode formatting controls; there are even bracketing controls ("start sequence", "end sequence"), such that the actual Unicode encoding is more like:
+
+```
+<LOAF OF BREAD> <VERTICAL JOINER> <DUCK> <TOP-RIGHT INSERTION> <BEGIN SEQUENCE> <STROKE> <HORIZONTAL JOINER> <LOAF OF BREAD> <END SEQUENCE>
+```
+
+This is obviously a recursive grammar and requires an LALR parser even to correctly parse an arbitrary Unicode sequence, let alone to implement layout. Andrew Glass has attempted to implement a [parser and layout engine](https://github.com/microsoft/font-tools/tree/main/EgyptianOpenType) in OpenType Layout rules alone, but once again the clunkiness of the system - tens of thousands of inscrutable rules, hundreds of "marker glyphs", and a maximum of three levels of embedding - suggest that a more ergonomic approach is possible.
+
+The `hieroglyphs` directory contains an LALR parser implementation which is relatively simple to follow, together with a recursive layout algorithm which allows for arbitrary levels of nesting.
+
+## shadow

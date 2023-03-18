@@ -58,3 +58,17 @@ This is obviously a recursive grammar and requires an LALR parser even to correc
 The `hieroglyphs` directory contains an LALR parser implementation which is relatively simple to follow, together with a recursive layout algorithm which allows for arbitrary levels of nesting.
 
 ## shadow
+
+WASM shapers have aesthetic benefits as well. One perennial problem with colour fonts is that the painting is done on a per-glyph basis. So in the string "ABC", the "A" is painted first, then the "B" and so on. For layer fonts with "shadows" or other effects which poke out the left hand side of the glyph, this leads to output like the following:
+
+![](shadow/shadow-ot.png)
+
+When using a WASM-based custom shaping engine, we can replicate the entire glyph stream, painting first the shadow layer, and then performing a "carriage return" by adding a negative advance totalling the whole advance of the current glyph stream, and then painting the base layer glyphs, like so:
+
+![](shadow/shadow-wasm.png)
+
+This simply isn't possible to achieve in OpenType without modification of the colour rendering process.
+
+## network
+
+## ruqaa

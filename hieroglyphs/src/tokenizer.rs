@@ -48,10 +48,8 @@ impl<'input> Iterator for Lexer<'input> {
             Some((i, 0x13438)) => Some(Ok((i, Tok::End, i + 1))),
             Some((i, &cp)) => {
                 if (0x13000..=0x1342F).contains(&cp) {
-                    println!("Found a sign {}", cp);
                     Some(Ok((i, Tok::Sign(cp), i + 1)))
                 } else {
-                    println!("Found an other {}", cp);
                     Some(Ok((i, Tok::Other(cp), i + 1)))
                 }
             }

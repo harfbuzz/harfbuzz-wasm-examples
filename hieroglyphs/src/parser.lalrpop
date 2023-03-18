@@ -106,7 +106,6 @@ CoreGroup: Box<Expr> = {
 EbInsertion : Box<Expr> = {"EB" <sg: InSubgroup> => <> }
 SbInsertion : Box<Expr> = {"SB" <sg: InSubgroup> => <> }
 EtInsertion : Box<Expr> = {"ET" <sg: InSubgroup> => <> }
-StInsertion : Box<Expr> = {"ST" <sg: InSubgroup> => <> }
 
 InSubgroup: Box<Expr> = {
     BrVerticalGroup,
@@ -116,14 +115,8 @@ InSubgroup: Box<Expr> = {
     Sign
 }
 
-FlatHorizontalGroup: Box<Expr> = {
-    BrFlatHorizontalGroup,
-    Sign
-};
-FlatVerticalGroup: Box<Expr> = {
- BrFlatVerticalGroup,
-    Sign
-};
+FlatHorizontalGroup: Box<Expr> = { BrFlatHorizontalGroup, Sign };
+FlatVerticalGroup: Box<Expr> = { BrFlatVerticalGroup, Sign };
 
 BrFlatVerticalGroup : Box<Expr> = {
     "BEGIN" <s:Sign> <r:("VERT" <Sign>)+> "END" => ast::make_vertical_group(s,r)
@@ -135,10 +128,6 @@ BrFlatHorizontalGroup : Box<Expr> = {
     "BEGIN" <Sign> "END"
 }
 
-pub Sign: Box<Expr> = {
-    "SIGN" => Box::new(Expr::Sign(<>))
-};
-pub Other: Box<Expr> = {
-    "OTHER" => Box::new(Expr::Other(<>))
-};
+pub Sign: Box<Expr> = { "SIGN" => Box::new(Expr::Sign(<>)) };
+pub Other: Box<Expr> = { "OTHER" => Box::new(Expr::Other(<>)) };
 

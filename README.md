@@ -59,7 +59,7 @@ The `hieroglyphs` directory contains an LALR parser implementation which is rela
 
 ## shadow
 
-WASM shapers have aesthetic benefits as well. One perennial problem with colour fonts is that the painting is done on a per-glyph basis. So in the string "ABC", the "A" is painted first, then the "B" and so on. For layer fonts with "shadows" or other effects which poke out the left hand side of the glyph, this leads to output like the following:
+WASM shapers have aesthetic benefits as well. One perennial problem with colour fonts is that the painting is done on a per-glyph basis. So in the string "ABC", all layers of the "A" glyph are painted first, then all layers of the "B" glyph and so on. For layer fonts with "shadows" or other effects which poke out the left hand side of the glyph, this leads to output like the following:
 
 ![](shadow/shadow-ot.png)
 

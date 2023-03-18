@@ -56,7 +56,7 @@ impl GulzarGlyph {
     }
 
     pub fn is_dot_above(&self) -> bool {
-        self.name.ends_with("da")
+        self.name.ends_with("da") || self.name == "FATHA"
     }
 
     pub fn bounding_box(&self, font: &Font) -> Rect {

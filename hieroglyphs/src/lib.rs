@@ -9,7 +9,7 @@ use tokenizer::{Lexer, Tok};
 lalrpop_mod!(pub parser);
 pub mod ast;
 
-const ADVANCE: f32 = 1000_f32;
+const ADVANCE: f32 = 1500_f32;
 
 struct LayoutEngine<'a> {
     font: &'a Font,

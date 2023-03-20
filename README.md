@@ -88,3 +88,11 @@ As with the Nastaliq example, it is possible to enumerate and pre-compute all po
 The `ruqaa` example implements this baseline balancing, and throws in some automated kerning as well for good measure.
 
 ![](ruqaa/example.png)
+
+## calculator
+
+Having established the need for "calculation" during layout, why not just use the font as a calculator?
+
+![](calculator/calculator.gif)
+
+

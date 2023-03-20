@@ -79,4 +79,12 @@ The `network` example takes each glyph and overlays it twice, each time at one o
 
 ## ruqaa
 
+The model of OpenType Layout is intrinsically local: "at *this* glyph or class of glyphs, do *this*." But some layout problems require non-local computation. 
 
+The Ruqaa style of Arabic requires each "word" to be vertically centered on the baseline. The appropriate vertical shift must therefore be computed by totalling the "rise" (vertical difference between entry and exit anchors) across an arbitrary length of word and with different vertical rises per letter, halved, and then applied globally to the word.
+
+As with the Nastaliq example, it is possible to enumerate and pre-compute all potential cases, but at the cost of huge numbers of layouts and slow rendering. These kind of problems which require *calculation*, such as summing distances or vertical positions, highlight the need for a more computational approach to layout where arithmetic can be performed directly.
+
+The `ruqaa` example implements this baseline balancing, and throws in some automated kerning as well for good measure.
+
+![](ruqaa/example.png)

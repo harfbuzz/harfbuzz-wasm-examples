@@ -71,4 +71,12 @@ This simply isn't possible to achieve in OpenType without modification of the co
 
 ## network
 
+Similarly, another long-standing dream of designers has been the ability to randomize glyphs and positions. Within the limited range of operations available in OpenType layout, even the best applications of "randomness" are rudimentary and unconvincing. Harfbuzz implements the `rand` feature which provides for random substitution from a choice of alternates, but not random positioning or any other application of randomness. While we do not recommend that a WASM based shaper has access to a truly random entropy source, the flexiibility of WASM shaping allows for "better" pseudorandomness (in terms of more complex pseudorandomness algorithms), random positioning and, gathering entropy from the input glyph sequence.
+
+The `network` example takes each glyph and overlays it twice, each time at one of twenty-five (pseudo-)randomly chosen positions, to create 125 different variants.
+
+![](network/example.png)
+
 ## ruqaa
+
+

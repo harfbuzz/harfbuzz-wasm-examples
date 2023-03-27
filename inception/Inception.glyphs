@@ -7,12 +7,12 @@ DisplayStrings = (
 );
 axes = (
 {
-name = "Optical Size";
-tag = opsz;
+name = "Pixel Shape";
+tag = ROND;
 },
 {
-name = Roundness;
-tag = ROND;
+name = "Optical Size";
+tag = opsz;
 }
 );
 date = "2023-03-26 14:34:12 +0000";
@@ -20,8 +20,8 @@ familyName = Inception;
 fontMaster = (
 {
 axesValues = (
-5,
-100
+100,
+200
 );
 id = m01;
 metricValues = (
@@ -51,8 +51,8 @@ name = "Small Round";
 },
 {
 axesValues = (
-200,
-100
+100,
+9
 );
 id = "91F0254D-AE70-4F0E-839A-589122BCBEE9";
 metricValues = (
@@ -82,8 +82,8 @@ name = "Large Round";
 },
 {
 axesValues = (
-5,
-0
+0,
+200
 );
 id = "E2AC362B-EF5F-4483-802D-EA6D735A27A3";
 metricValues = (
@@ -113,8 +113,8 @@ name = "Small Square";
 },
 {
 axesValues = (
-200,
-0
+0,
+9
 );
 id = "53B69B1A-7EC8-4DB3-B9E3-541D2D7A0A5E";
 metricValues = (

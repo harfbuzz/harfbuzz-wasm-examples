@@ -35,6 +35,7 @@ use kurbo::BezPath;
 extern "C" {
     fn face_get_upem(face: u32) -> u32;
     fn font_get_face(font: u32) -> u32;
+    fn face_create_font(face: u32) -> u32;
     fn font_get_glyph(font: u32, unicode: u32, uvs: u32) -> u32;
     fn font_get_scale(font: u32, x_scale: *mut i32, y_scale: *mut i32);
     fn font_get_glyph_extents(font: u32, glyph: u32, extents: *mut CGlyphExtents) -> bool;
@@ -46,6 +47,7 @@ extern "C" {
     fn buffer_copy_contents(buffer: u32, cbuffer: *mut CBufferContents) -> bool;
     fn buffer_set_contents(buffer: u32, cbuffer: &CBufferContents) -> bool;
     fn debugprint(s: *const u8);
+    fn blob_face_create(blob: *mut Blob, index: u32) -> u32;
     fn shape_with(
         font: u32,
         buffer: u32,
@@ -225,15 +227,18 @@ impl Face {
             data: std::ptr::null_mut(),
             length: 0,
         };
-        unsafe {
-            face_copy_table(self.0, tag_u, &mut blob);
-        }
+        unsafe { face_copy_table(self.0, tag_u, &mut blob) || panic!("Couldn't reference table") };
         blob
     }
 
     /// Get the face's design units per em.
     pub fn get_upem(&self) -> u32 {
         unsafe { face_get_upem(self.0) }
+    }
+
+    /// Create a font object from this face.
+    pub fn create_font(&self) -> Font {
+        Font(unsafe { face_create_font(self.0) })
     }
 }
 
@@ -319,6 +324,16 @@ pub struct Blob {
     pub length: u32,
     /// A raw pointer to the contents
     pub data: *mut u8,
+}
+
+impl Blob {
+    pub fn into_face(mut self, index: u32) -> Face {
+        let faceptr = unsafe { blob_face_create(&mut self as *mut _, index) };
+        if faceptr == 0 {
+            panic!("Couldn't create face from blob")
+        }
+        Face(faceptr)
+    }
 }
 
 /// Glyph information in a buffer item provided by Harfbuzz

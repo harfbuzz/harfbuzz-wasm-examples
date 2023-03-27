@@ -25,6 +25,13 @@
 //! ```
 use std::ffi::{c_int, CStr, CString};
 
+pub fn ot_round<T>(value: T) -> i32
+where
+    T: Into<f64>,
+{
+    (value.into() as f32 + 0.5_f32).floor() as i32
+}
+
 #[cfg(feature = "kurbo")]
 use kurbo::BezPath;
 
@@ -46,6 +53,8 @@ extern "C" {
     fn face_copy_table(font: u32, tag: u32, blob: *mut Blob) -> bool;
     fn buffer_copy_contents(buffer: u32, cbuffer: *mut CBufferContents) -> bool;
     fn buffer_set_contents(buffer: u32, cbuffer: &CBufferContents) -> bool;
+    fn font_copy_coords(font: u32, coords: *mut CCoords) -> bool;
+    fn font_set_coords(font: u32, coords: &CCoords) -> bool;
     fn debugprint(s: *const u8);
     fn blob_face_create(blob: *mut Blob, index: u32) -> u32;
     fn shape_with(
@@ -204,6 +213,34 @@ impl Font {
             results.push(path);
         }
         results
+    }
+
+    /// Get the normalized variation coordinates
+    pub fn get_var_coords(&self) -> Vec<f32> {
+        let mut container = CCoords {
+            count: 0,
+            coords: std::ptr::null_mut(),
+        };
+        if !unsafe { font_copy_coords(self.0, &mut container) } {
+            panic!("Couldn't copy variation coordinates")
+        }
+        let coords =
+            unsafe { std::slice::from_raw_parts(container.coords, container.count as usize) }
+                .to_vec();
+        debug(&format!("Container coords: {:?}", coords));
+        return coords.iter().map(|i| *i as f32 / 16384.0).collect();
+    }
+
+    /// Set the normalized variation coordinates
+    pub fn set_var_coords(&self, coords: &[f32]) {
+        let mut f2dot14: Vec<i32> = coords.iter().map(|i| ot_round(i * 16384.0)).collect();
+        let container = CCoords {
+            count: coords.len(),
+            coords: f2dot14.as_mut_ptr(),
+        };
+        if !unsafe { font_set_coords(self.0, &container) } {
+            panic!("Couldn't copy variation coordinates")
+        }
     }
 }
 
@@ -465,6 +502,13 @@ struct CGlyphOutline {
     points: *mut CGlyphOutlinePoint,
     n_contours: usize,
     contours: *mut usize,
+}
+
+#[repr(C)]
+#[derive(Debug)]
+struct CCoords {
+    count: usize,
+    coords: *mut i32,
 }
 
 /// Our default buffer item struct. See also [`Glyph`].

@@ -19,8 +19,8 @@
     <numPaletteEntries value="3"/>
     <palette index="0">
       <color index="0" value="#FFFFFFFF"/>
-      <color index="1" value="#FFFFFF44"/>
-      <color index="2" value="#FFFFFF11"/>
+      <color index="1" value="#FFFFFFAA"/>
+      <color index="2" value="#FFFFFF88"/>
     </palette>
   </CPAL>
 

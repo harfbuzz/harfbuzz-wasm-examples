@@ -13,6 +13,18 @@ tag = ROND;
 {
 name = "Optical Size";
 tag = opsz;
+},
+{
+name = Weight;
+tag = wght;
+},
+{
+name = Slant;
+tag = slnt;
+},
+{
+name = Cursive;
+tag = CURS;
 }
 );
 date = "2023-03-26 14:34:12 +0000";
@@ -21,7 +33,10 @@ fontMaster = (
 {
 axesValues = (
 100,
-200
+200,
+0,
+0,
+0
 );
 id = m01;
 metricValues = (
@@ -52,7 +67,10 @@ name = "Small Round";
 {
 axesValues = (
 100,
-9
+9,
+0,
+0,
+0
 );
 id = "91F0254D-AE70-4F0E-839A-589122BCBEE9";
 metricValues = (
@@ -83,7 +101,10 @@ name = "Large Round";
 {
 axesValues = (
 0,
-200
+200,
+0,
+0,
+0
 );
 id = "E2AC362B-EF5F-4483-802D-EA6D735A27A3";
 metricValues = (
@@ -114,7 +135,10 @@ name = "Small Square";
 {
 axesValues = (
 0,
-9
+9,
+0,
+0,
+0
 );
 id = "53B69B1A-7EC8-4DB3-B9E3-541D2D7A0A5E";
 metricValues = (

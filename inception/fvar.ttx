@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ttFont sfntVersion="\x00\x01\x00\x00" ttLibVersion="4.38">
+
+  <fvar>
+
+    <!-- Pixel Shape -->
+    <Axis>
+      <AxisTag>ROND</AxisTag>
+      <Flags>0x0</Flags>
+      <MinValue>0.0</MinValue>
+      <DefaultValue>100.0</DefaultValue>
+      <MaxValue>100.0</MaxValue>
+      <AxisNameID>256</AxisNameID>
+    </Axis>
+
+    <!-- Optical Size -->
+    <Axis>
+      <AxisTag>opsz</AxisTag>
+      <Flags>0x0</Flags>
+      <MinValue>9.0</MinValue>
+      <DefaultValue>200.0</DefaultValue>
+      <MaxValue>200.0</MaxValue>
+      <AxisNameID>257</AxisNameID>
+    </Axis>
+
+    <!-- Weight -->
+    <Axis>
+      <AxisTag>wght</AxisTag>
+      <Flags>0x0</Flags>
+      <MinValue>400.0</MinValue>
+      <DefaultValue>400.0</DefaultValue>
+      <MaxValue>800.0</MaxValue>
+      <AxisTag>wght</AxisTag>
+      <AxisNameID>258</AxisNameID>
+    </Axis>
+
+    <!-- Slant -->
+    <Axis>
+      <AxisTag>slnt</AxisTag>
+      <Flags>0x0</Flags>
+      <MinValue>-15.0</MinValue>
+      <DefaultValue>0.0</DefaultValue>
+      <MaxValue>0.0</MaxValue>
+      <AxisNameID>259</AxisNameID>
+    </Axis>
+
+    <!-- Cursive -->
+    <Axis>
+      <AxisTag>CRSV</AxisTag>
+      <Flags>0x0</Flags>
+      <MinValue>0.0</MinValue>
+      <DefaultValue>0.5</DefaultValue>
+      <MaxValue>1.0</MaxValue>
+      <AxisNameID>260</AxisNameID>
+    </Axis>
+
+  </fvar>
+
+</ttFont>

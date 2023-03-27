@@ -86,7 +86,15 @@ pub fn shape(
     // let (x_scale, _y_scale) = font.get_scale();
     let pixel_size = -font.get_glyph_extents(2).height as f32;
     // debug(&format!("Test pixel size: {}", pixel_size));
-    // debug(&format!("Test X scale: {}", x_scale));
+    let coords = font.get_var_coords();
+    // debug(&format!("Test Outer Coords: {:?}", coords));
+    if coords.len() > 1 {
+        inner_font.set_var_coords(&coords[2..]);
+        // debug(&format!(
+        //     "Test Inner Coords: {:?}",
+        //     inner_font.get_var_coords()
+        // ));
+    }
     let mut new_glyphs: Vec<Glyph> = vec![];
 
     // Ordinary shaping

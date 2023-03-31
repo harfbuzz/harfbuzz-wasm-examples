@@ -97,7 +97,7 @@ Having established the need for "calculation" during layout, why not just use th
 
 ## inception
 
-Inception puts a font inside a font. The "inner font" is Stephen Nixon's [Recurive](https://fonts.google.com/specimen/Recursive); the outer font contains three identical glyphs - three small circles of different colours.
+Inception puts a font inside a font. The "inner font" is Stephen Nixon's [Recursive](https://fonts.google.com/specimen/Recursive) (what else!); the outer font contains three identical glyphs - three small circles of different colours.
 
 When text is shaped in `inception`, the WASM code runs the shaping engine on the *inner* font. The code next calls an embedded [rasterizing library](https://docs.rs/ab_glyph_rasterizer/latest/ab_glyph_rasterizer/index.html) which rasterizes the font into pixels at a given resolution, specified through the optical size variable axis.
 

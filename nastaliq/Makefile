@@ -1,5 +1,5 @@
-BASE_FONT=../base-fonts/Gulzar-Simple.ttf
-TARGET_FONT=Gulzar-Wasm.ttf
+BASE_FONT=../base-fonts/NotoNastaliqUrdu-VF.ttf
+TARGET_FONT=NotoNastaliq-Wasm.ttf
 WASM=gulzar_shaper_bg.wasm
 
 $(TARGET_FONT): pkg/$(WASM) $(BASE_FONT)

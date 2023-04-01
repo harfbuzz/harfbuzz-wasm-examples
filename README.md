@@ -25,7 +25,7 @@ The `gulzar` directory contains a Nastaliq Urdu font which solves these problems
 * detects and mitigates overlaps in glyph outlines, repositioning diacritics to avoid collisions.
 * measures the height and contours of word endings and word beginnings to create even spacing.
 
-All this is done at run-time by specifying the desired positioning behaviour directly, rather than enumerating the possibilities, meaning that the WASM font is one third the size of the OT implementation.
+All this is done at run-time by specifying the desired positioning behaviour directly, rather than enumerating the possibilities, meaning that the WASM font is over 100k smaller than the size of the OT implementation.
 
 ![](gulzar/comparison.png)
 

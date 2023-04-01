@@ -18,7 +18,7 @@ fn get_scaled_outline(font: &Font, glyph: u32) -> Vec<BezPath> {
     {
         let center_vec = big_bounds.center().to_vec2();
         let affine = Affine::translate(center_vec * -1.0)
-            * Affine::scale(1.1)
+            * Affine::scale(1.10)
             * Affine::translate(center_vec);
         for path in paths.iter_mut() {
             path.apply_affine(affine);
@@ -64,26 +64,32 @@ pub fn shape(
     let (x_scale, _y_scale) = font.get_scale();
     let upem = face.get_upem();
     let scale_factor: f32 = x_scale as f32 / upem as f32;
-    let bari_ye_tail: i32 = (633.0 * scale_factor) as i32;
     // debug(&format!("Scale factor: {:}", scale_factor));
 
     let mut buffer = GulzarBuffer::from_ref(buf_ref);
     prepare_buffer(&mut buffer, &font);
 
     for mut item in buffer.glyphs.iter_mut() {
-        if item.name == "BARI_YEf1" {
+        if item.name.contains("YehBarreeFin") {
             // OK, we saw a bari ye. Let's count down the number
             // of units we have left within the span of this glyph.
-            bari_ye_counter = Some(bari_ye_tail + item.x_advance);
+            let bari_ye_tail: i32 =
+                font.get_glyph_extents(item.codepoint).width - item.x_advance - 20;
+            debug(&format!(
+                "Bari Ye tail is {:?} = {:}",
+                font.get_glyph_extents(item.codepoint),
+                bari_ye_tail
+            ));
+            bari_ye_counter = Some(bari_ye_tail);
             item.in_bari_ye = true;
         } else if let Some(mut remainder) = bari_ye_counter {
             // Init glyphs stop the sequence
-            if item.name.contains('i') && remainder > 0 {
+            if item.name.contains("Ini") && remainder > 0 {
                 debug(&format!(
                     "Adding {:} advance to {:} to fill bari-ye tail",
                     remainder, item.name
                 ));
-                item.x_advance += remainder;
+                item.x_advance += (remainder as f32 / scale_factor) as i32;
                 remainder = 0;
             } else {
                 remainder -= item.x_advance;
@@ -105,15 +111,16 @@ pub fn shape(
         let this_item = &buffer.glyphs[ix];
         let mut ix2 = ix + 1;
         let mut to_kern_with = None;
-        if !(this_item.name.contains('i') || this_item.name.contains('u')) {
+        let mut seen_space = false;
+        if !(this_item.name.contains("Ini") || this_item.name.contains("Sep")) {
             continue;
         }
         while ix2 < buffer_len {
             if buffer.glyphs[ix2].name.contains("space") && buffer.glyphs[ix2].x_advance > 0 {
-                break;
+                seen_space = true;
             }
 
-            if buffer.glyphs[ix2].name.contains('u') || buffer.glyphs[ix2].name.contains('f') {
+            if buffer.glyphs[ix2].name.contains("Sep") || buffer.glyphs[ix2].name.contains("Fin") {
                 to_kern_with = Some(ix2);
                 break;
             }
@@ -147,15 +154,21 @@ pub fn shape(
             let kern_required = _determine_kern(
                 &left_paths,
                 other_paths,
-                150.0 * scale_factor,
+                300.0 * scale_factor,
                 0.0,
                 scale_factor,
-            );
-            // debug(&format!(
-            //     "Kern between {} and {}: {}",
-            //     this_item.name, other_item.name, kern_required,
-            // ));
-            kerns.push((ix, kern_required as i32));
+            ) + if seen_space {
+                480.0 * scale_factor
+            } else {
+                0.0
+            };
+            debug(&format!(
+                "Kern between {} and {}: {}",
+                this_item.name, buffer.glyphs[to_kern_with].name, kern_required,
+            ));
+            if kern_required < 0.0 {
+                kerns.push((ix, kern_required as i32));
+            }
         }
     }
 
@@ -169,7 +182,7 @@ pub fn shape(
     let mut last_bari_ye_ix = 0;
     let mut bari_ye_dots = vec![];
     for (ix, item) in buffer.glyphs.iter().enumerate() {
-        if item.name == "BARI_YEf1" {
+        if item.name == "YehBarreeFin" {
             last_bari_ye_ix = ix;
         }
         if item.in_bari_ye
@@ -182,7 +195,7 @@ pub fn shape(
     for ix in bari_ye_dots {
         let mut item = &mut buffer.glyphs[ix];
         let extents = font.get_glyph_extents(item.codepoint);
-        item.y_offset = extents.height - (50.0 * scale_factor) as i32;
+        item.y_offset = extents.height - (-150.0 * scale_factor) as i32;
     }
 
     // // Let's do dot avoidance
@@ -216,7 +229,7 @@ pub fn shape(
             break;
         }
         let to_lower = to_lower.unwrap();
-        buffer.glyphs[to_lower].y_offset -= (150.0 * scale_factor) as i32;
+        buffer.glyphs[to_lower].y_offset -= (50.0 * scale_factor) as i32;
     }
 
     // // above
@@ -243,7 +256,7 @@ pub fn shape(
             break;
         }
         let to_raise = to_raise.unwrap();
-        buffer.glyphs[to_raise].y_offset += (150.0 * scale_factor) as i32;
+        buffer.glyphs[to_raise].y_offset += (50.0 * scale_factor) as i32;
     }
 
     1

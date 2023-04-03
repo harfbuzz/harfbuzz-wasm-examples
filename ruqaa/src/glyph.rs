@@ -52,11 +52,15 @@ impl BufferItem for GulzarGlyph {
 
 impl GulzarGlyph {
     pub fn is_dot_below(&self) -> bool {
-        self.name.ends_with("db")
+        self.name.ends_with("below-ar")
     }
 
     pub fn is_dot_above(&self) -> bool {
-        self.name.ends_with("da")
+        self.name.ends_with("above-ar")
+    }
+
+    pub fn is_dot(&self) -> bool {
+        self.name.ends_with("above-ar") || self.name.ends_with("below-ar")
     }
 
     pub fn bounding_box(&self, font: &Font) -> Rect {

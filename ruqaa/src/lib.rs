@@ -76,7 +76,7 @@ pub fn shape(
         let mut ix2 = ix + 1;
         let mut to_kern_with = None;
         if !(this_item.name.contains(".init")
-            || (this_item.name.ends_with("-ar") && !this_item.name.contains("dot")))
+            || (this_item.name.ends_with("-ar") && !this_item.is_dot()))
         {
             continue;
         }
@@ -85,8 +85,7 @@ pub fn shape(
                 break;
             }
 
-            if (buffer.glyphs[ix2].name.ends_with("-ar")
-                && !buffer.glyphs[ix2].name.contains("dot"))
+            if (buffer.glyphs[ix2].name.ends_with("-ar") && !buffer.glyphs[ix2].is_dot())
                 || buffer.glyphs[ix2].name.contains("fina")
             {
                 to_kern_with = Some(ix2);

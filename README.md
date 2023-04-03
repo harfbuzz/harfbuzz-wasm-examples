@@ -107,3 +107,11 @@ The end result of this is a "pixel machine", which generates an infinite variety
 
 ![](inception/inception.gif)
 
+## handwriting
+
+In a similar vein, a long-standing problem is creating dotted fonts, particularly for joined script. Ideally one would want to treat a sequence of connected glyphs as a single line, to ensure that dots placed along one glyph will not collide with dots placed along the previous or next glyph. This problem becomes intractable when variable fonts are introduced into the mix: how do we ensure consistent dot spacing along a line *and* variable font interpolatability? It's impossible to create an interpolatable variable font when the number of dots in a glyph at one location on a variation axis is different from the number of dots at a different location.
+
+But with WASM we can place the dots at runtime, collecting a sequence of strokes into a single Bezier path and then dotting the path as a unity, using user-supplied size and spacing values. Like this:
+
+![](handwriting/handwriting.gif)
+

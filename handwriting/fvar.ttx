@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ttFont sfntVersion="\x00\x01\x00\x00" ttLibVersion="4.38">
+  <fvar>
+
+    <!-- Dot Size -->
+    <Axis>
+      <AxisTag>DTSZ</AxisTag>
+      <Flags>0x0</Flags>
+      <MinValue>100.0</MinValue>
+      <DefaultValue>100.0</DefaultValue>
+      <MaxValue>200.0</MaxValue>
+      <AxisNameID>256</AxisNameID>
+    </Axis>
+
+    <!-- Dot Spacing -->
+    <Axis>
+      <AxisTag>DTSP</AxisTag>
+      <Flags>0x0</Flags>
+      <MinValue>0.0</MinValue>
+      <DefaultValue>0.0</DefaultValue>
+      <MaxValue>100.0</MaxValue>
+      <AxisNameID>257</AxisNameID>
+    </Axis>
+
+    <!-- Small Dot -->
+    <NamedInstance flags="0x0" subfamilyNameID="258">
+      <coord axis="DTSZ" value="100.0"/>
+      <coord axis="DTSP" value="0.0"/>
+    </NamedInstance>
+
+    <!-- Big Dot -->
+    <NamedInstance flags="0x0" subfamilyNameID="259">
+      <coord axis="DTSZ" value="200.0"/>
+      <coord axis="DTSP" value="0.0"/>
+    </NamedInstance>
+  </fvar>
+
+</ttFont>

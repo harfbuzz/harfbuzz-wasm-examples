@@ -86,7 +86,7 @@ When using a WASM-based custom shaping engine, we can replicate the entire glyph
 
 This simply isn't possible to achieve in OpenType without modification of the colour rendering process.
 
-*The "shadow" shaping engine is **37** lines of Rust code. You can follow it!*
+*The "shadow" shaping engine is **37** lines of Rust code. That's barely more than a screenful!*
 
 ---
 
@@ -98,7 +98,7 @@ The `network` example takes each glyph and overlays it twice, each time at one o
 
 ![](network/example.png)
 
-*The "network" shaper is 71 lines of Rust code.*
+*The "network" shaper is 71 lines of Rust code. You can follow it!*
 
 ---
 
@@ -124,7 +124,7 @@ Having established the need for "calculation" during layout, why not just use th
 
 ![](calculator/calculator.gif)
 
-*The "calculator" shaper is 58 lines of Rust code. You can follow it!*
+*The "calculator" shaper is 58 lines of Rust code. Most of it is regular expressions to parse the input text.*
 
 ---
 
@@ -140,7 +140,7 @@ The end result of this is a "pixel machine", which generates an infinite variety
 
 ![](inception/inception.gif)
 
-*The "inception" shaper is admittedly complex, but it's only 159 lines of heavily commented Rust code. You'll be fine!*
+*The "inception" shaper is admittedly complex, but it's only 159 lines of really heavily commented Rust code. You'll be fine!*
 
 ---
 

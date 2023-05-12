@@ -36,6 +36,8 @@ All this is done at run-time by specifying the desired positioning behaviour dir
 
 ![](nastaliq/comparison.png)
 
+*The Nastaliq shaper is 630 lines of Rust code. It has copious comments, so you should be able to follow it, but maybe don't start with this one.*
+
 **IMPORTANT DISCLAIMER. Noto Nastaliq WASM is just a quick proof of concept designed to demonstrate what is possible with the WASM shaper, and should not be understood to demonstrate Nastaliq; there are many bugs, and it's not an accurate reflection of good calligraphic style.**
 
 ---
@@ -68,6 +70,8 @@ This is obviously a recursive grammar and requires an LALR parser even to correc
 
 The `hieroglyphs` directory contains an LALR parser implementation which is relatively simple to follow, together with a recursive layout algorithm which allows for arbitrary levels of nesting.
 
+*The Hieroglyphics shaper is 500 lines of uncommented Rust LALR and parser code. I wouldn't start here either.*
+
 ---
 
 ### shadow
@@ -82,6 +86,8 @@ When using a WASM-based custom shaping engine, we can replicate the entire glyph
 
 This simply isn't possible to achieve in OpenType without modification of the colour rendering process.
 
+*The "shadow" shaping engine is **37** lines of Rust code. You can follow it!*
+
 ---
 
 ### network
@@ -91,6 +97,8 @@ Similarly, another long-standing dream of designers has been the ability to rand
 The `network` example takes each glyph and overlays it twice, each time at one of twenty-five (pseudo-)randomly chosen positions, to create 125 different variants.
 
 ![](network/example.png)
+
+*The "network" shaper is 71 lines of Rust code.*
 
 ---
 
@@ -106,6 +114,8 @@ The `ruqaa` example implements this baseline balancing, and throws in some autom
 
 ![](ruqaa/example.png)
 
+*The "network" shaper is 431 lines of Rust code, mainly because it steals the kerning from the nastaliq shaper.*
+
 ---
 
 ### calculator
@@ -113,6 +123,8 @@ The `ruqaa` example implements this baseline balancing, and throws in some autom
 Having established the need for "calculation" during layout, why not just use the font as a calculator?
 
 ![](calculator/calculator.gif)
+
+*The "calculator" shaper is 58 lines of Rust code. You can follow it!*
 
 ---
 
@@ -128,6 +140,8 @@ The end result of this is a "pixel machine", which generates an infinite variety
 
 ![](inception/inception.gif)
 
+*The "inception" shaper is admittedly complex, but it's only 159 lines of heavily commented Rust code. You'll be fine!*
+
 ---
 
 ### handwriting
@@ -137,4 +151,6 @@ In a similar vein, a long-standing problem is creating dotted fonts, particularl
 But with WASM we can place the dots at runtime, collecting a sequence of strokes into a single Bezier path and then dotting the path as a unity, using user-supplied size and spacing values. Like this:
 
 ![](handwriting/handwriting.gif)
+
+*The "handwriting" shaper is 179 lines of uncommented Rust code. I'll comment it soon.*
 

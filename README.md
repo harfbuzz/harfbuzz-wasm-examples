@@ -4,7 +4,7 @@ This repository contains sources and binaries of example fonts using the Harfbuz
 
 ## What do they demonstrate and why?
 
-### gulzar
+### nastaliq
 
 Urdu Nastaliq typography has long been seen as a challenge which pushes up against the limitations of OpenType Layout. John Hudson's TypeCon talk "Problems of Adjacency" ([slide 21-](http://tiro.com/John/TypeCon2014_Hudson_DECK.pdf#page=21)) illustrates some of the challenges of Nastaliq layout:
 
@@ -18,7 +18,7 @@ Each of these challenges *can* be largely overcome through approximation and enu
 > As with the spacing problem, the quantity
 and complexity of the lookups involved is huge, presenting challenges for workflows, font compilation, and performance...  But it is still a workaround: a convoluted hack to bypass the limitations of an inappropriate paradigm.
 
-The `gulzar` directory contains a Nastaliq Urdu font which solves these problems; it has a Nastaliq-specific shaping engine which:
+The `nastaliq` directory contains a Nastaliq Urdu font which solves these problems; it has a Nastaliq-specific shaping engine which:
 
 * computes the width of bari-ye sequences and adjusts the spacing of the previous word appropriately.
 * computes the height of dots under bari ye and moves them underneath.
@@ -27,7 +27,7 @@ The `gulzar` directory contains a Nastaliq Urdu font which solves these problems
 
 All this is done at run-time by specifying the desired positioning behaviour directly, rather than enumerating the possibilities, meaning that the WASM font is over 100k smaller than the size of the OT implementation.
 
-![](gulzar/comparison.png)
+![](nastaliq/comparison.png)
 
 **IMPORTANT DISCLAIMER. Noto Nastaliq WASM is just a quick proof of concept designed to demonstrate what is possible with the WASM shaper, and should not be understood to demonstrate Nastaliq; there are many bugs, and it's not an accurate reflection of good calligraphic style.**
 

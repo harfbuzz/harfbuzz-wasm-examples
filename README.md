@@ -2,6 +2,13 @@
 
 This repository contains sources and binaries of example fonts using the Harfbuzz WASM Shaper.
 
+## Preliminaries
+
+* There is a version of FontGoggles compiled to use the Harfbuzz WASM shaper *for M1 macs* in the [fontgoggles-wasm-m1](fontgoggles-wasm-m1/) directory.
+* To learn more about writing your own Harfbuzz WASM shapers, first read [the WASM shaper docs](https://github.com/harfbuzz/harfbuzz/blob/wasm/docs/wasm-shaper.md).
+* Next look through the documentation for the [Rust WASM shaper interface](harfbuzz-wasm/src/lib.rs).
+* The Harfbuzz WASM shaper is an experimental technology. Feel free to play with it, but don't expect to use it in your fonts any time in the next few years...
+
 ## What do they demonstrate and why?
 
 ### nastaliq
@@ -31,6 +38,8 @@ All this is done at run-time by specifying the desired positioning behaviour dir
 
 **IMPORTANT DISCLAIMER. Noto Nastaliq WASM is just a quick proof of concept designed to demonstrate what is possible with the WASM shaper, and should not be understood to demonstrate Nastaliq; there are many bugs, and it's not an accurate reflection of good calligraphic style.**
 
+---
+
 ### hieroglyphs
 
 The encoding model of Egyptian hieroglyphics is unlike any other system in Unicode. It is based on the concept of repeated subdivisions of the "quadrat" (what typographers would think of as the em-square). For example, the following symbol found in the second text of Urkuden IV:
@@ -59,7 +68,9 @@ This is obviously a recursive grammar and requires an LALR parser even to correc
 
 The `hieroglyphs` directory contains an LALR parser implementation which is relatively simple to follow, together with a recursive layout algorithm which allows for arbitrary levels of nesting.
 
-## shadow
+---
+
+### shadow
 
 WASM shapers have aesthetic benefits as well. One perennial problem with colour fonts is that the painting is done on a per-glyph basis. So in the string "ABC", all layers of the "A" glyph are painted first, then all layers of the "B" glyph and so on. For layer fonts with "shadows" or other effects which poke out the left hand side of the glyph, this leads to output like the following:
 
@@ -71,7 +82,9 @@ When using a WASM-based custom shaping engine, we can replicate the entire glyph
 
 This simply isn't possible to achieve in OpenType without modification of the colour rendering process.
 
-## network
+---
+
+### network
 
 Similarly, another long-standing dream of designers has been the ability to randomize glyphs and positions. Within the limited range of operations available in OpenType layout, even the best applications of "randomness" are rudimentary and unconvincing. Harfbuzz implements the `rand` feature which provides for random substitution from a choice of alternates, but not random positioning or any other application of randomness. While we do not recommend that a WASM based shaper has access to a truly random entropy source, the flexiibility of WASM shaping allows for "better" pseudorandomness (in terms of more complex pseudorandomness algorithms), random positioning and, gathering entropy from the input glyph sequence.
 
@@ -79,7 +92,9 @@ The `network` example takes each glyph and overlays it twice, each time at one o
 
 ![](network/example.png)
 
-## ruqaa
+---
+
+### ruqaa
 
 The model of OpenType Layout is intrinsically local: "at *this* glyph or class of glyphs, do *this*." But some layout problems require non-local computation. 
 
@@ -91,13 +106,17 @@ The `ruqaa` example implements this baseline balancing, and throws in some autom
 
 ![](ruqaa/example.png)
 
-## calculator
+---
+
+### calculator
 
 Having established the need for "calculation" during layout, why not just use the font as a calculator?
 
 ![](calculator/calculator.gif)
 
-## inception
+---
+
+### inception
 
 Inception puts a font inside a font. The "inner font" is Stephen Nixon's [Recursive](https://fonts.google.com/specimen/Recursive) (what else!); the outer font contains three identical glyphs - three small circles of different colours.
 
@@ -109,7 +128,9 @@ The end result of this is a "pixel machine", which generates an infinite variety
 
 ![](inception/inception.gif)
 
-## handwriting
+---
+
+### handwriting
 
 In a similar vein, a long-standing problem is creating dotted fonts, particularly for joined script. Ideally one would want to treat a sequence of connected glyphs as a single line, to ensure that dots placed along one glyph will not collide with dots placed along the previous or next glyph. This problem becomes intractable when variable fonts are introduced into the mix: how do we ensure consistent dot spacing along a line *and* variable font interpolatability? It's impossible to create an interpolatable variable font when the number of dots in a glyph at one location on a variation axis is different from the number of dots at a different location.
 

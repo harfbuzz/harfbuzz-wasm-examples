@@ -29,6 +29,8 @@ All this is done at run-time by specifying the desired positioning behaviour dir
 
 ![](gulzar/comparison.png)
 
+**IMPORTANT DISCLAIMER. Noto Nastaliq WASM is just a quick proof of concept designed to demonstrate what is possible with the WASM shaper, and should not be understood to demonstrate Nastaliq; there are many bugs, and it's not an accurate reflection of good calligraphic style.**
+
 ### hieroglyphs
 
 The encoding model of Egyptian hieroglyphics is unlike any other system in Unicode. It is based on the concept of repeated subdivisions of the "quadrat" (what typographers would think of as the em-square). For example, the following symbol found in the second text of Urkuden IV:

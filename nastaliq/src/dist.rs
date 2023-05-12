@@ -2,37 +2,39 @@ use core::cmp::Ordering;
 use harfbuzz_wasm::debug;
 use kurbo::{Affine, BezPath, ParamCurve, ParamCurveNearest, PathSeg};
 
-pub fn _determine_kern(
+// This is a Rust port of the Nastaliq kerning algorithm
+// detailed at https://simoncozens.github.io/nastaliq-autokerning/
+// It's horribly inefficient because I coded it in an excited
+// hurry. Given two sets of paths, one for the left hand side
+// and one for the right hand side, work out how many units to
+// kern so that these paths are `target_distance` units apart.
+
+pub fn determine_kern(
     left_paths: &[BezPath],
     right_paths: &[BezPath],
     target_distance: f32,
     max_tuck: f32,
     scale_factor: f32,
 ) -> f32 {
+    // We're going to slide the paths around until they fit,
+    // so make a mutable copy of them.
     let mut right_paths: Vec<BezPath> = right_paths.clone().into();
-    // debug(&format!("Left paths were {:?}", left_paths));
-    // debug(&format!("Right paths were {:?}", right_paths));
 
     let mut minimum_possible = -1000.0 * scale_factor;
-    // if max_tuck != 0.0 {
-    //     let maximum_width = layer_1.width as f32 * max_tuck;
-    //     let left_edge = (-layer_2.lsb().expect("Oops")).min(0.0);
-    //     minimum_possible = left_edge - maximum_width;
-    // }
     let mut iterations = 0;
     let mut kern = 0.0;
+    // This should probably be an Option<f32>: None or something
+    // but like I said, hurry.`
     let mut min_distance = -9999.0;
 
+    // Move them around up to ten times to get them within a target distance.
     while iterations < 10 && (target_distance - min_distance).abs() > 10.0 {
+        // Work out how far they are away at closest point, work out the
+        // kern, move the right hand paths and iterate.
         if let Some(md) = path_distance(left_paths, &right_paths) {
             min_distance = md;
-            // debug(&format!(
-            //     "Default distance between paths is {}",
-            //     min_distance,
-            // ));
             let this_kern = target_distance - min_distance;
             kern += this_kern;
-            // debug(&format!("Kern applied is {}", kern));
             if kern < minimum_possible {
                 return minimum_possible;
             }
@@ -50,6 +52,9 @@ pub fn _determine_kern(
     kern
 }
 
+// The rest of the code is just a terribly inefficient and inaccurate
+// way to work out how far apart two sets of paths are at their closest
+// point. A real algorithm should use linesweep.
 pub fn path_distance(left_paths: &[BezPath], right_paths: &[BezPath]) -> Option<f32> {
     let mut min_distance: Option<f64> = None;
     for p1 in left_paths {
@@ -67,6 +72,8 @@ pub fn path_distance(left_paths: &[BezPath], right_paths: &[BezPath]) -> Option<
     min_distance.map(|x| x as f32)
 }
 
+// Work out which are the closest pair of segments. I'm sure there's
+// a better way to do this than just trying all combinations.
 fn min_distance_bezpath(one: &BezPath, other: &BezPath) -> f64 {
     let segs1 = one.segments();
     let mut best_pair: Option<(f64, kurbo::PathSeg, kurbo::PathSeg)> = None;

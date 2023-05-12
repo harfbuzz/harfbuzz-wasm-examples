@@ -1,7 +1,9 @@
-use harfbuzz_wasm::{Buffer, BufferItem, CGlyphExtents, CGlyphInfo, CGlyphPosition, Font};
+use harfbuzz_wasm::{Buffer, BufferItem, CGlyphInfo, CGlyphPosition, Font};
 use itertools::Itertools;
 use kurbo::{Affine, BezPath, PathEl, PathSeg, Rect};
 
+// This is the standard glyph representation but with a few more
+// handy fields.
 #[derive(Debug)]
 pub struct GulzarGlyph {
     pub codepoint: u32,
@@ -51,14 +53,39 @@ impl BufferItem for GulzarGlyph {
 }
 
 impl GulzarGlyph {
+    // These routines will obviously need to be customized
+    // for each font, but maybe in a production Nastaliq shaper
+    // they would be driven from data in a font table.
     pub fn is_dot_below(&self) -> bool {
-        self.name.ends_with("BelowNS")
+        self.name.ends_with("BelowNS") || self.name.ends_with("HehCommaNS")
     }
 
     pub fn is_dot_above(&self) -> bool {
         self.name.ends_with("AboveNS") || self.name.ends_with("FathaNS")
     }
 
+    pub fn is_bari_ye(&self) -> bool {
+        self.name.contains("YehBarreeFin")
+    }
+
+    pub fn is_init(&self) -> bool {
+        self.name.contains("Ini")
+    }
+
+    pub fn is_isol(&self) -> bool {
+        self.name.contains("Sep")
+    }
+
+    pub fn is_fina(&self) -> bool {
+        self.name.contains("Fin")
+    }
+
+    pub fn is_space(&self) -> bool {
+        self.name.contains("space")
+    }
+
+    // This is the bounding box of the *positioned* glyph,
+    // i.e. including the full running-total x advance.
     pub fn bounding_box(&self, font: &Font) -> Rect {
         let extents = font.get_glyph_extents(self.codepoint);
         let bl_x = extents.x_bearing + self.x_total_advance + self.x_offset;
@@ -68,6 +95,8 @@ impl GulzarGlyph {
         Rect::from_points((bl_x as f64, bl_y as f64), (tr_x as f64, tr_y as f64))
     }
 
+    // Similarly, kurbo representations of a glyph's paths
+    // positioned absolutely.
     pub fn positioned_paths(&self) -> Vec<BezPath> {
         let mut paths = self.paths.clone(); // urgh
         let affine = Affine::translate((
@@ -80,7 +109,9 @@ impl GulzarGlyph {
         paths
     }
 
+    // Terribly inefficient collision detector
     pub fn collides(&self, other: &GulzarGlyph, font: &Font) -> bool {
+        // If the bounding boxes don't intersect, we can't collide.
         if self
             .bounding_box(font)
             .intersect(other.bounding_box(font))
@@ -89,14 +120,14 @@ impl GulzarGlyph {
         {
             return false;
         }
-        let (sx, sy) = font.get_scale();
+        let (sx, _sy) = font.get_scale();
 
         let my_paths = self.positioned_paths();
         let their_paths = other.positioned_paths();
         // We could do line sweep or something here, but proof of concept...
         for p1 in my_paths {
             for p2 in &their_paths {
-                if intersects(&p1, p2, 10.0 * (sx as f64)) {
+                if intersects(&p1, p2, 50.0 * (sx as f64)) {
                     return true;
                 }
             }

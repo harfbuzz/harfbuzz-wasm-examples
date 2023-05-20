@@ -5,7 +5,7 @@ This repository contains sources and binaries of example fonts using the Harfbuz
 ## Preliminaries
 
 * There is a version of FontGoggles compiled to use the Harfbuzz WASM shaper *for M1 macs* in the [fontgoggles-wasm-m1](fontgoggles-wasm-m1/) directory.
-* To learn more about writing your own Harfbuzz WASM shapers, first read [the WASM shaper docs](https://github.com/harfbuzz/harfbuzz/blob/wasm/docs/wasm-shaper.md).
+* To learn more about writing your own Harfbuzz WASM shapers, first read [the WASM shaper docs](https://github.com/harfbuzz/harfbuzz/blob/main/docs/wasm-shaper.md).
 * Next look through the documentation for the [Rust WASM shaper interface](harfbuzz-wasm/src/lib.rs).
 * The Harfbuzz WASM shaper is an experimental technology. Feel free to play with it, but don't expect to use it in your fonts any time in the next few years...
 

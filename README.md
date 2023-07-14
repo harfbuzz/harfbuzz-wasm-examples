@@ -154,3 +154,14 @@ But with WASM we can place the dots at runtime, collecting a sequence of strokes
 
 *The "handwriting" shaper is 179 lines of uncommented Rust code. I'll comment it soon.*
 
+### bubblekern
+
+In 2015, Toshi Omagari came up with a new idea for [kerning using bubbles](https://tosche.net/blog/bubblekern). The designer draws a "bubble" around the outline of a glyph, and a script run inside the font editor creates kerning pairs to ensure that the space between the bubbles is constant. However, the script did not create kerning pairs for all glyphs for bubbles; as Toshi explains:
+
+> If your font has 600 glyphs, the maximum number of possible pairs is 600²=360,000 which contains meaningless pairs like %& or some other junk that you won’t enjoy cleaning up.
+
+A more economical alternate, however, is to store the bubble outlines in the font, and have the shaping engine run the BubbleKern algorithm at runtime - instead of storing 360,000 pairs, you just store 600 bubbles.
+
+This example contains a subset of Noto Sans with a few additional glyphs called `A.bubble`, `C.bubble`, etc. For each pair of glyphs (say `AV`), the shaper checks to see if an equivalent `A.bubble`/`V.bubble` pair exists in the font. If so, these bubbles are positioned, the distance between the closest points is measured, and a kerning adjustment is generated. Because this runs after the ordinary OT shaper, the BubbleKerning is used in addition to any source kerning in the font.
+
+![](bubblekern/bubblekern.png)

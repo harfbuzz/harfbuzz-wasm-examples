@@ -165,3 +165,8 @@ A more economical alternate, however, is to store the bubble outlines in the fon
 This example contains a subset of Noto Sans with a few additional glyphs called `A.bubble`, `C.bubble`, etc. For each pair of glyphs (say `AV`), the shaper checks to see if an equivalent `A.bubble`/`V.bubble` pair exists in the font. If so, these bubbles are positioned, the distance between the closest points is measured, and a kerning adjustment is generated. Because this runs after the ordinary OT shaper, the BubbleKerning is used in addition to any source kerning in the font.
 
 ![](bubblekern/bubblekern.png)
+
+## 3rd party demos
+
+* [fuglede.github.io/llama.ttf](https://fuglede.github.io/llama.ttf)
+* [github.com/Erk-/programmable-fonts](https://github.com/Erk-/programmable-fonts) ([youtu.be/Ms1Drb9Vw9M](https://www.youtube.com/watch?v=Ms1Drb9Vw9M))

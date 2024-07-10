@@ -170,3 +170,4 @@ This example contains a subset of Noto Sans with a few additional glyphs called 
 
 * [fuglede.github.io/llama.ttf](https://fuglede.github.io/llama.ttf)
 * [github.com/Erk-/programmable-fonts](https://github.com/Erk-/programmable-fonts) ([youtu.be/Ms1Drb9Vw9M](https://www.youtube.com/watch?v=Ms1Drb9Vw9M))
+* [translate.ttf](https://github.com/bjia56/translate.ttf)

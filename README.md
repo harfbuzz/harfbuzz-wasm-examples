@@ -114,7 +114,7 @@ The `ruqaa` example implements this baseline balancing, and throws in some autom
 
 ![](ruqaa/example.png)
 
-*The "network" shaper is 431 lines of Rust code, mainly because it steals the kerning from the nastaliq shaper.*
+*The "ruqaa" shaper is 431 lines of Rust code, mainly because it steals the kerning from the nastaliq shaper.*
 
 ---
 

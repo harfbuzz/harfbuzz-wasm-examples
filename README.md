@@ -42,38 +42,6 @@ All this is done at run-time by specifying the desired positioning behaviour dir
 
 ---
 
-### hieroglyphs
-
-The encoding model of Egyptian hieroglyphics is unlike any other system in Unicode. It is based on the concept of repeated subdivisions of the "quadrat" (what typographers would think of as the em-square). For example, the following symbol found in the second text of Urkuden IV:
-
-![](hieroglyphs/example.png)
-
-is encoded as follows:
-
-![](hieroglyphs/example2.png)
-
-* Vertical subdivision of:
-    - Loaf of bread
-    - Top-right insertion of:
-        + Duck
-        + Horizontal subdivision
-            * Stroke
-            * Loaf of bread
-
-These "insertion" and "subdivision" characters are Unicode formatting controls; there are even bracketing controls ("start sequence", "end sequence"), such that the actual Unicode encoding is more like:
-
-```
-<LOAF OF BREAD> <VERTICAL JOINER> <DUCK> <TOP-RIGHT INSERTION> <BEGIN SEQUENCE> <STROKE> <HORIZONTAL JOINER> <LOAF OF BREAD> <END SEQUENCE>
-```
-
-This is obviously a recursive grammar and requires an LALR parser even to correctly parse an arbitrary Unicode sequence, let alone to implement layout. Andrew Glass has attempted to implement a [parser and layout engine](https://github.com/microsoft/font-tools/tree/main/EgyptianOpenType) in OpenType Layout rules alone, but once again the clunkiness of the system - tens of thousands of inscrutable rules, hundreds of "marker glyphs", and a maximum of three levels of embedding - suggest that a more ergonomic approach is possible.
-
-The `hieroglyphs` directory contains an LALR parser implementation which is relatively simple to follow, together with a recursive layout algorithm which allows for arbitrary levels of nesting.
-
-*The Hieroglyphics shaper is 500 lines of uncommented Rust LALR and parser code. I wouldn't start here either.*
-
----
-
 ### shadow
 
 WASM shapers have aesthetic benefits as well. One perennial problem with colour fonts is that the painting is done on a per-glyph basis. So in the string "ABC", all layers of the "A" glyph are painted first, then all layers of the "B" glyph and so on. For layer fonts with "shadows" or other effects which poke out the left hand side of the glyph, this leads to output like the following:
@@ -154,6 +122,8 @@ But with WASM we can place the dots at runtime, collecting a sequence of strokes
 
 *The "handwriting" shaper is 179 lines of uncommented Rust code. I'll comment it soon.*
 
+---
+
 ### bubblekern
 
 In 2015, Toshi Omagari came up with a new idea for [kerning using bubbles](https://tosche.net/blog/bubblekern). The designer draws a "bubble" around the outline of a glyph, and a script run inside the font editor creates kerning pairs to ensure that the space between the bubbles is constant. However, the script did not create kerning pairs for all glyphs for bubbles; as Toshi explains:
@@ -166,9 +136,42 @@ This example contains a subset of Noto Sans with a few additional glyphs called 
 
 ![](bubblekern/bubblekern.png)
 
+---
+
+### hieroglyphs
+
+The encoding model of Egyptian hieroglyphics is unlike any other system in Unicode. It is based on the concept of repeated subdivisions of the "quadrat" (what typographers would think of as the em-square). For example, the following symbol found in the second text of Urkuden IV:
+
+![](hieroglyphs/example.png)
+
+is encoded as follows:
+
+![](hieroglyphs/example2.png)
+
+* Vertical subdivision of:
+    - Loaf of bread
+    - Top-right insertion of:
+        + Duck
+        + Horizontal subdivision
+            * Stroke
+            * Loaf of bread
+
+These "insertion" and "subdivision" characters are Unicode formatting controls; there are even bracketing controls ("start sequence", "end sequence"), such that the actual Unicode encoding is more like:
+
+```
+<LOAF OF BREAD> <VERTICAL JOINER> <DUCK> <TOP-RIGHT INSERTION> <BEGIN SEQUENCE> <STROKE> <HORIZONTAL JOINER> <LOAF OF BREAD> <END SEQUENCE>
+```
+
+This is obviously a recursive grammar and requires an LALR parser even to correctly parse an arbitrary Unicode sequence, let alone to implement layout. Andrew Glass has attempted to implement a [parser and layout engine](https://github.com/microsoft/font-tools/tree/main/EgyptianOpenType) in OpenType Layout rules alone, but once again the clunkiness of the system - tens of thousands of inscrutable rules, hundreds of "marker glyphs", and a maximum of three levels of embedding - suggest that a more ergonomic approach is possible.
+
+The `hieroglyphs` directory contains an LALR parser implementation which is relatively simple to follow, together with a recursive layout algorithm which allows for arbitrary levels of nesting.
+
+*The Hieroglyphics shaper is 500 lines of uncommented Rust LALR and parser code. I wouldn't start here either.*
+
 ## 3rd party demos
 
 * [fuglede.github.io/llama.ttf](https://fuglede.github.io/llama.ttf)
 * [github.com/Erk-/programmable-fonts](https://github.com/Erk-/programmable-fonts) ([youtu.be/Ms1Drb9Vw9M](https://www.youtube.com/watch?v=Ms1Drb9Vw9M))
 * [translate.ttf](https://github.com/bjia56/translate.ttf)
 * [handwriter.ttf](https://github.com/hsfzxjy/handwriter.ttf)
+

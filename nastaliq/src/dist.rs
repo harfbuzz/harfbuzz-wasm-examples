@@ -1,3 +1,4 @@
+use crate::mindist::quad_quad_dist;
 use core::ops::Range;
 use harfbuzz_wasm::debug;
 use kurbo::{BezPath, CubicBez, Line, ParamCurve, ParamCurveNearest, PathEl, PathSeg, Point, QuadBez};
@@ -416,7 +417,8 @@ fn min_distance_bezpath(
             (PathSeg::Line(l1), PathSeg::Line(l2)) => line_line_dist(l1, l2),
             (PathSeg::Line(l1), PathSeg::Quad(c2)) => line_curve_dist(l1, c2),
             (PathSeg::Quad(c1), PathSeg::Line(l2)) => line_curve_dist(l2, c1),
-            (PathSeg::Quad(_c1), PathSeg::Quad(_c2)) => s1.min_dist(s2, 0.5).distance,
+            // What s1.min_dist(s2, 0.5).distance is.
+            (PathSeg::Quad(c1), PathSeg::Quad(c2)) => quad_quad_dist(&c1, &c2),
             _ => {
                 debug("Unusual configuration");
                 0.0

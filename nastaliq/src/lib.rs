@@ -1,5 +1,6 @@
 mod dist;
 mod glyph;
+mod mindist;
 
 // Auto-kerning routine, look in dist.rs for this.
 use dist::determine_kern;

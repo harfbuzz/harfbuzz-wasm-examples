@@ -1,4 +1,3 @@
-use core::cmp::Ordering;
 use core::ops::Range;
 use harfbuzz_wasm::debug;
 use kurbo::{BezPath, CubicBez, Line, ParamCurve, ParamCurveNearest, PathEl, PathSeg, Point, QuadBez};
@@ -23,6 +22,8 @@ pub fn determine_kern(
     let mut left = Segments::new(left_paths);
     left.sample();
     let mut right = Segments::new(right_paths);
+    // The closest segments of each pair of paths in the last round.
+    let mut closest = vec![None; left.ends.len() * right.ends.len()];
 
     let mut minimum_possible = -1000.0 * scale_factor;
     let mut iterations = 0;
@@ -36,7 +37,7 @@ pub fn determine_kern(
         // Work out how far they are away at closest point, work out the
         // kern, move the right hand paths and iterate.
         right.sample();
-        if let Some(md) = path_distance(&left, &right) {
+        if let Some(md) = path_distance(&left, &right, &mut closest) {
             min_distance = md;
             let this_kern = target_distance - min_distance;
             kern += this_kern;
@@ -54,6 +55,13 @@ pub fn determine_kern(
     kern
 }
 
+// How many segments of a path share a box.
+const BOXED: usize = 4;
+
+// A box around some points: the least x, the greatest x, the least y
+// and the greatest y.
+type PointBox = [f64; 4];
+
 // The segments of some paths, and the three points on each segment that
 // segments are first compared by.
 struct Segments {
@@ -67,6 +75,16 @@ struct Segments {
     pending: Option<f64>,
     // The start, middle and end of each segment.
     points: Vec<[Point; 3]>,
+    // A box around the points of every BOXED segments of a path: the
+    // boxes of the first path, then those of the second, and so on.
+    boxes: Vec<PointBox>,
+}
+
+// The segments of one path, and the boxes around their points.
+#[derive(Clone)]
+struct PathRange {
+    segs: Range<usize>,
+    boxes: Range<usize>,
 }
 
 impl Segments {
@@ -77,6 +95,7 @@ impl Segments {
             closers: vec![],
             pending: None,
             points: vec![],
+            boxes: vec![],
         };
         for path in paths {
             this.add_path(path);
@@ -128,12 +147,18 @@ impl Segments {
         }
     }
 
-    // The segments of one path after the other.
-    fn paths(&self) -> impl Iterator<Item = Range<usize>> + Clone + '_ {
-        let mut start = 0;
-        self.ends.iter().map(move |&end| {
-            let range = start..end;
-            start = end;
+    // The segments and boxes of one path after the other.
+    fn paths(&self) -> impl Iterator<Item = PathRange> + Clone + '_ {
+        let mut seg_start = 0;
+        let mut box_start = 0;
+        self.ends.iter().map(move |&seg_end| {
+            let box_end = box_start + (seg_end - seg_start + BOXED - 1) / BOXED;
+            let range = PathRange {
+                segs: seg_start..seg_end,
+                boxes: box_start..box_end,
+            };
+            seg_start = seg_end;
+            box_start = box_end;
             range
         })
     }
@@ -176,6 +201,29 @@ impl Segments {
             PathSeg::Quad(q) => [q.eval(0.0), q.eval(0.5), q.eval(1.0)],
             PathSeg::Cubic(c) => [c.eval(0.0), c.eval(0.5), c.eval(1.0)],
         }));
+        self.boxes.clear();
+        let mut start = 0;
+        for &end in &self.ends {
+            for points in self.points[start..end].chunks(BOXED) {
+                let mut around = [f64::INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::NEG_INFINITY];
+                for p in points.iter().flatten() {
+                    if p.x < around[0] {
+                        around[0] = p.x;
+                    }
+                    if p.x > around[1] {
+                        around[1] = p.x;
+                    }
+                    if p.y < around[2] {
+                        around[2] = p.y;
+                    }
+                    if p.y > around[3] {
+                        around[3] = p.y;
+                    }
+                }
+                self.boxes.push(around);
+            }
+            start = end;
+        }
     }
 
     // Drop the closing segments of subpaths whose two ends have become
@@ -209,11 +257,19 @@ impl Segments {
 // The rest of the code is just a terribly inefficient and inaccurate
 // way to work out how far apart two sets of paths are at their closest
 // point. A real algorithm should use linesweep.
-fn path_distance(left: &Segments, right: &Segments) -> Option<f32> {
+fn path_distance(
+    left: &Segments,
+    right: &Segments,
+    closest: &mut [Option<(usize, usize)>],
+) -> Option<f32> {
     let mut min_distance: Option<f64> = None;
+    let mut closest = closest.iter_mut();
     for p1 in left.paths() {
         for p2 in right.paths() {
-            let d = min_distance_bezpath(left, p1.clone(), right, p2);
+            let d = match closest.next() {
+                Some(hint) => min_distance_bezpath(left, &p1, right, &p2, hint),
+                None => min_distance_bezpath(left, &p1, right, &p2, &mut None),
+            };
             // log::debug!("  d={:?}", d);
             if min_distance.is_none() || d < min_distance.unwrap() {
                 // log::debug!("    (new record)");
@@ -226,34 +282,18 @@ fn path_distance(left: &Segments, right: &Segments) -> Option<f32> {
     min_distance.map(|x| x as f32)
 }
 
-// Work out which are the closest pair of segments. I'm sure there's
-// a better way to do this than just trying all combinations.
+// Work out which are the closest pair of segments, and how far apart
+// those two are. `hint` is the pair it was the last time, if these paths
+// have been compared before, and becomes the pair it is now.
 fn min_distance_bezpath(
     one: &Segments,
-    range1: Range<usize>,
+    path1: &PathRange,
     other: &Segments,
-    range2: Range<usize>,
+    path2: &PathRange,
+    hint: &mut Option<(usize, usize)>,
 ) -> f64 {
-    let mut best_pair: Option<(f64, usize, usize)> = None;
-    for i1 in range1 {
-        let p1 = &one.points[i1];
-        for i2 in range2.clone() {
-            let p2 = &other.points[i2];
-            let dist = p1
-                .iter()
-                .zip(p2.iter())
-                .map(|(a, b)| a.distance(*b))
-                .min_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Less))
-                .unwrap();
-            if let Some((best, _, _)) = best_pair {
-                if dist > best {
-                    continue;
-                }
-            }
-            best_pair = Some((dist, i1, i2));
-        }
-    }
-    if let Some((_, i1, i2)) = best_pair {
+    *hint = closest_segments(one, path1, other, path2, *hint);
+    if let Some((i1, i2)) = *hint {
         let (s1, s2) = (one.segs[i1], other.segs[i2]);
         // debug(&format!("Best pair was {:?}, {:?}", s1, s2));
         match (s1, s2) {
@@ -268,6 +308,173 @@ fn min_distance_bezpath(
         }
     } else {
         f64::MAX
+    }
+}
+
+// The pair of segments, one of each path, that are closest going by
+// their three points: the start, middle and end of one segment are
+// compared with the start, middle and end of the other, and the
+// smallest of the three distances counts. Of several pairs that are
+// equally close, the last one wins: the one with the later segment of
+// the first path and, between those, the later segment of the second.
+//
+// This used to try all combinations, and that is still what it finds,
+// but most combinations can be ruled out without measuring them:
+//
+// - Three points of one segment cannot be nearer to three points of
+//   another than the boxes around them are. So when two boxes are
+//   farther apart than the best pair so far, none of the segments in
+//   them needs looking at. We start with a pair that is likely to be
+//   close, to have a good "best so far" early.
+// - The squares of the distances are compared first, which avoids
+//   three calls to hypot() for almost all pairs that are looked at.
+//
+// Either way a pair is only left out when it is certainly farther apart
+// than the best pair, so that it could neither win nor tie.
+fn closest_segments(
+    one: &Segments,
+    path1: &PathRange,
+    other: &Segments,
+    path2: &PathRange,
+    hint: Option<(usize, usize)>,
+) -> Option<(usize, usize)> {
+    let points1 = &one.points[path1.segs.clone()];
+    let points2 = &other.points[path2.segs.clone()];
+    let boxes1 = &one.boxes[path1.boxes.clone()];
+    let boxes2 = &other.boxes[path2.boxes.clone()];
+    let mut closest = Closest {
+        distance: f64::INFINITY,
+        limit: f64::INFINITY,
+        pair: None,
+    };
+
+    // Something to start with: the closest pair of the last round, or
+    // else the segments in the two boxes that are closest to each other.
+    let hint = hint.and_then(|(i1, i2)| {
+        let i1 = i1.checked_sub(path1.segs.start)?;
+        let i2 = i2.checked_sub(path2.segs.start)?;
+        Some((i1, points1.get(i1)?, i2, points2.get(i2)?))
+    });
+    if let Some((i1, p1, i2, p2)) = hint {
+        closest.offer(i1, p1, i2, p2);
+    } else {
+        let mut nearest = None;
+        let mut least = f64::INFINITY;
+        for (b1, box1) in boxes1.iter().enumerate() {
+            for (b2, box2) in boxes2.iter().enumerate() {
+                let gap = box_gap_squared(box1, box2);
+                if nearest.is_none() || gap < least {
+                    least = gap;
+                    nearest = Some((b1, b2));
+                }
+            }
+        }
+        if let Some((b1, b2)) = nearest {
+            closest.offer_all(b1, points1, b2, points2);
+        }
+    }
+
+    for (b1, box1) in boxes1.iter().enumerate() {
+        for (b2, box2) in boxes2.iter().enumerate() {
+            if box_gap_squared(box1, box2) > closest.limit {
+                continue;
+            }
+            closest.offer_all(b1, points1, b2, points2);
+        }
+    }
+    closest
+        .pair
+        .map(|(i1, i2)| (path1.segs.start + i1, path2.segs.start + i2))
+}
+
+// The square of the distance between two boxes: no point of one box is
+// nearer than this to a point of the other, in x and in y separately,
+// and so also when the differences are rounded, squared and added up
+// the way Closest::offer() does it.
+#[inline(always)]
+fn box_gap_squared(a: &PointBox, b: &PointBox) -> f64 {
+    let dx = positive(a[0] - b[1], b[0] - a[1]);
+    let dy = positive(a[2] - b[3], b[2] - a[3]);
+    dx * dx + dy * dy
+}
+
+// Whichever of the two is positive (they never both are), or zero.
+#[inline(always)]
+fn positive(a: f64, b: f64) -> f64 {
+    if a > 0.0 {
+        a
+    } else if b > 0.0 {
+        b
+    } else {
+        0.0
+    }
+}
+
+// The closest pair of segments found so far.
+struct Closest {
+    // How far apart the pair is.
+    distance: f64,
+    // Its square and a bit: two points whose squared distance is more
+    // than this are farther apart than `distance`.
+    limit: f64,
+    pair: Option<(usize, usize)>,
+}
+
+impl Closest {
+    // Look at one pair of segments.
+    #[inline(always)]
+    fn offer(&mut self, i1: usize, p1: &[Point; 3], i2: usize, p2: &[Point; 3]) {
+        let (x0, y0) = (p1[0].x - p2[0].x, p1[0].y - p2[0].y);
+        let (x1, y1) = (p1[1].x - p2[1].x, p1[1].y - p2[1].y);
+        let (x2, y2) = (p1[2].x - p2[2].x, p1[2].y - p2[2].y);
+        let square0 = x0 * x0 + y0 * y0;
+        let square1 = x1 * x1 + y1 * y1;
+        let square2 = x2 * x2 + y2 * y2;
+        let limit = self.limit;
+        if !((square0 <= limit) | (square1 <= limit) | (square2 <= limit)) {
+            return;
+        }
+        // The distance of the pair is the least of the three distances.
+        // Those over the limit are more than `distance` and do not
+        // matter, if there are others.
+        let mut distance = f64::INFINITY;
+        if square0 <= limit {
+            distance = x0.hypot(y0);
+        }
+        if square1 <= limit {
+            let d = x1.hypot(y1);
+            if d < distance {
+                distance = d;
+            }
+        }
+        if square2 <= limit {
+            let d = x2.hypot(y2);
+            if d < distance {
+                distance = d;
+            }
+        }
+        if distance < self.distance {
+            self.distance = distance;
+            // hypot() and the sum of squares are both correct to within a
+            // few units in the last place; this allows for far more.
+            self.limit = distance * distance * (1.0 + 1e-9);
+            self.pair = Some((i1, i2));
+        } else if distance == self.distance && Some((i1, i2)) > self.pair {
+            self.pair = Some((i1, i2));
+        }
+    }
+
+    // Look at all pairs of segments of two boxes.
+    #[inline(always)]
+    fn offer_all(&mut self, b1: usize, points1: &[[Point; 3]], b2: usize, points2: &[[Point; 3]]) {
+        let (start1, start2) = (b1 * BOXED, b2 * BOXED);
+        let end1 = (start1 + BOXED).min(points1.len());
+        let end2 = (start2 + BOXED).min(points2.len());
+        for (i1, p1) in points1[start1..end1].iter().enumerate() {
+            for (i2, p2) in points2[start2..end2].iter().enumerate() {
+                self.offer(start1 + i1, p1, start2 + i2, p2);
+            }
+        }
     }
 }
 

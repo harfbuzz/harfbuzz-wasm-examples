@@ -555,8 +555,15 @@ fn at_least_apart(a: &PointBox, b: &PointBox) -> f64 {
             largest = coordinate.abs();
         }
     }
+    box_gap_squared(a, b) * (1.0 - 1e-9) - rounding(largest)
+}
+
+// The allowance for rounding when points are measured whose coordinates
+// are no larger than `largest`: 2^-36 M^2.
+#[inline(always)]
+fn rounding(largest: f64) -> f64 {
     const ROUNDING: f64 = 1.0 / (1u64 << 36) as f64;
-    box_gap_squared(a, b) * (1.0 - 1e-9) - ROUNDING * largest * largest
+    ROUNDING * largest * largest
 }
 
 // Whether paths that are at least the square root of `apart` apart are
@@ -797,11 +804,78 @@ fn line_line_dist(l1: kurbo::Line, l2: kurbo::Line) -> f64 {
     (a.min(b).min(c).min(d)).sqrt()
 }
 
+// The distance from the curve to the nearest of six points of the line.
+//
+// Finding the point of the curve nearest to a point takes solving a
+// cubic. It is not done for a point that is farther from the curve than
+// the nearest distance found so far, as far as we can tell without
+// solving: the search could only come up with something larger.
+//
+// The square of the distance from a point to the point of the curve at
+// t is a polynomial in t of degree four. Its five Bernstein
+// coefficients are made of the dot products of the control points, as
+// seen from the point, and for t from 0 to 1 it is a weighted mean of
+// them: nowhere below the smallest, which is therefore the square of
+// how far the point is at least from the curve. The coefficients and
+// the distance kurbo finds are both rounded, each by less than
+// 2^-44 M^2 for a largest coordinate M, and we allow 2^-36 M^2 as
+// at_least_apart() does. The points are tried nearest first, going by
+// that.
 fn line_curve_dist(l1: kurbo::Line, c1: kurbo::QuadBez) -> f64 {
     let t = [0.0, 0.2, 0.4, 0.6, 0.8, 0.99];
-    t.iter()
-        .map(|x| c1.nearest(l1.eval(*x), 1.0).distance_sq)
-        .reduce(|a, b| a.min(b))
-        .unwrap_or(f64::MAX)
-        .sqrt()
+    let points = t.map(|x| l1.eval(x));
+    let mut largest = 0.0;
+    for coordinate in [
+        c1.p0.x, c1.p0.y, c1.p1.x, c1.p1.y, c1.p2.x, c1.p2.y, l1.p0.x, l1.p0.y, l1.p1.x, l1.p1.y,
+    ] {
+        if coordinate.abs() > largest {
+            largest = coordinate.abs();
+        }
+    }
+    let rounding = rounding(largest);
+    // The square of how far each point is at least from the curve.
+    let mut apart = points.map(|p| {
+        let (x0, y0) = (c1.p0.x - p.x, c1.p0.y - p.y);
+        let (x1, y1) = (c1.p1.x - p.x, c1.p1.y - p.y);
+        let (x2, y2) = (c1.p2.x - p.x, c1.p2.y - p.y);
+        let mut least = x0 * x0 + y0 * y0;
+        for coefficient in [
+            x0 * x1 + y0 * y1,
+            (x0 * x2 + y0 * y2 + 2.0 * (x1 * x1 + y1 * y1)) * (1.0 / 3.0),
+            x1 * x2 + y1 * y2,
+            x2 * x2 + y2 * y2,
+        ] {
+            if coefficient < least {
+                least = coefficient;
+            }
+        }
+        let apart = least * (1.0 - 1e-9) - rounding;
+        // Should the numbers be too large to say, say nothing.
+        if apart < f64::INFINITY {
+            apart
+        } else {
+            f64::NEG_INFINITY
+        }
+    });
+    let mut nearest: Option<f64> = None;
+    for _ in &points {
+        // The nearest of the points that have not been tried: those
+        // that have are marked as infinitely far.
+        let mut next = 0;
+        for (i, &this) in apart.iter().enumerate() {
+            if this < apart[next] {
+                next = i;
+            }
+        }
+        if let Some(nearest) = nearest {
+            // The points that are left are all farther than this.
+            if apart[next] > nearest * (1.0 + 1e-9) {
+                break;
+            }
+        }
+        let distance_sq = c1.nearest(points[next], 1.0).distance_sq;
+        nearest = Some(nearest.map_or(distance_sq, |nearest| nearest.min(distance_sq)));
+        apart[next] = f64::INFINITY;
+    }
+    nearest.unwrap_or(f64::MAX).sqrt()
 }

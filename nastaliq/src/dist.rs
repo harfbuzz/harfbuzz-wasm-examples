@@ -818,6 +818,18 @@ impl Closest {
         if !((square0 <= limit) | (square1 <= limit) | (square2 <= limit)) {
             return;
         }
+        self.take(i1, i2, [(x0, y0, square0), (x1, y1, square1), (x2, y2, square2)]);
+    }
+
+    // The pair of segments has points that are not over the limit:
+    // see how far apart it is, and whether it is the closest now. Each
+    // of `between` is the differences in x and y between two points and
+    // the sum of their squares.
+    #[cold]
+    #[inline(never)]
+    fn take(&mut self, i1: usize, i2: usize, between: [(f64, f64, f64); 3]) {
+        let [(x0, y0, square0), (x1, y1, square1), (x2, y2, square2)] = between;
+        let limit = self.limit;
         // The distance of the pair is the least of the three distances.
         // Those over the limit are more than `distance` and do not
         // matter, if there are others.
@@ -854,9 +866,23 @@ impl Closest {
         let (start1, start2) = (b1 * BOXED, b2 * BOXED);
         let end1 = (start1 + BOXED).min(points1.len());
         let end2 = (start2 + BOXED).min(points2.len());
-        for (i1, p1) in points1[start1..end1].iter().enumerate() {
-            for (i2, p2) in points2[start2..end2].iter().enumerate() {
-                self.offer(start1 + i1, p1, start2 + i2, p2);
+        let (points1, points2) = (&points1[start1..end1], &points2[start2..end2]);
+        // Full boxes are the usual case: say so, so that the loops are
+        // unrolled.
+        if let (Ok(points1), Ok(points2)) = (
+            <&[[Point; 3]; BOXED]>::try_from(points1),
+            <&[[Point; 3]; BOXED]>::try_from(points2),
+        ) {
+            for (i1, p1) in points1.iter().enumerate() {
+                for (i2, p2) in points2.iter().enumerate() {
+                    self.offer(start1 + i1, p1, start2 + i2, p2);
+                }
+            }
+        } else {
+            for (i1, p1) in points1.iter().enumerate() {
+                for (i2, p2) in points2.iter().enumerate() {
+                    self.offer(start1 + i1, p1, start2 + i2, p2);
+                }
             }
         }
     }

@@ -26,6 +26,7 @@ pub struct Kerner {
     left: Segments,
     right: Segments,
     pairs: Vec<PathPair>,
+    near: Vec<(PointBox, usize)>,
 }
 
 impl Kerner {
@@ -48,6 +49,7 @@ impl Kerner {
         // the right paths around until they fit.
         let (left_glyphs, right_glyph) = (left, right);
         let (left, right, pairs) = (&mut self.left, &mut self.right, &mut self.pairs);
+        let near = &mut self.near;
         left.clear();
         for glyph in left_glyphs {
             left.add_glyph(glyph);
@@ -69,7 +71,7 @@ impl Kerner {
             // Work out how far they are away at closest point, work out the
             // kern, move the right hand paths and iterate.
             right.settle();
-            if let Some(md) = path_distance(left, right, pairs) {
+            if let Some(md) = path_distance(left, right, pairs, near) {
                 min_distance = md;
                 let this_kern = target_distance - min_distance;
                 kern += this_kern;
@@ -89,7 +91,7 @@ impl Kerner {
 }
 
 // How many segments of a path share a box.
-const BOXED: usize = 4;
+const BOXED: usize = 3;
 
 // A box around some points: the least x, the greatest x, the least y
 // and the greatest y.
@@ -115,13 +117,14 @@ struct Segments {
     paths: Vec<Path>,
 }
 
-// One path: which segments and boxes are its own, and the box around
-// all its control points.
+// One path: which segments and boxes are its own, the box around all
+// its control points, and the box around the points of its segments.
 #[derive(Clone)]
 struct Path {
     segs: Range<usize>,
     boxes: Range<usize>,
     around: PointBox,
+    points: PointBox,
 }
 
 impl Segments {
@@ -235,15 +238,20 @@ impl Segments {
         if boxed > 0 {
             self.boxes.push(around.get());
         }
-        // All the control points are in one of these boxes.
+        let mut points = SmallBox::new();
         for around in &self.boxes[first_box..] {
-            others.add(Point::new(around[0], around[2]));
-            others.add(Point::new(around[1], around[3]));
+            points.add(Point::new(around[0], around[2]));
+            points.add(Point::new(around[1], around[3]));
         }
+        // All the control points are in one of these two boxes.
+        let points = points.get();
+        others.add(Point::new(points[0], points[2]));
+        others.add(Point::new(points[1], points[3]));
         self.paths.push(Path {
             segs: first_seg..self.segs.len(),
             boxes: first_box..self.boxes.len(),
             around: others.get(),
+            points,
         });
     }
 
@@ -265,6 +273,8 @@ impl Segments {
             let segs = self.segs[path.segs.clone()].chunks_mut(BOXED);
             let points = self.points[path.segs.clone()].chunks_mut(BOXED);
             let boxes = self.boxes[path.boxes.clone()].iter_mut();
+            path.points[0] = f64::INFINITY;
+            path.points[1] = f64::NEG_INFINITY;
             for ((segs, points), around) in segs.zip(points).zip(boxes) {
                 let (mut least, mut greatest) = (f64::INFINITY, f64::NEG_INFINITY);
                 for (seg, points) in segs.iter_mut().zip(points.iter_mut()) {
@@ -303,6 +313,12 @@ impl Segments {
                 }
                 around[0] = least;
                 around[1] = greatest;
+                if least < path.points[0] {
+                    path.points[0] = least;
+                }
+                if greatest > path.points[1] {
+                    path.points[1] = greatest;
+                }
             }
             // Adding to the least and to the greatest x of some points
             // gives the least and the greatest x of the moved points.
@@ -345,6 +361,12 @@ impl Segments {
                 self.boxes.push(around.get());
             }
             path.boxes = first_box..self.boxes.len();
+            let mut points = SmallBox::new();
+            for around in &self.boxes[path.boxes.clone()] {
+                points.add(Point::new(around[0], around[2]));
+                points.add(Point::new(around[1], around[3]));
+            }
+            path.points = points.get();
             path.around[0] += dx;
             path.around[1] += dx;
         }
@@ -448,7 +470,12 @@ struct PathPair {
 // measured already cannot be the smallest, so we measure first the
 // pair whose boxes are nearest and then only the pairs that could
 // still beat the smallest so far.
-fn path_distance(left: &Segments, right: &Segments, pairs: &mut [PathPair]) -> Option<f32> {
+fn path_distance(
+    left: &Segments,
+    right: &Segments,
+    pairs: &mut [PathPair],
+    near: &mut Vec<(PointBox, usize)>,
+) -> Option<f32> {
     // The pair whose boxes are nearest to each other.
     let mut nearest = 0;
     let mut least = f64::INFINITY;
@@ -488,7 +515,7 @@ fn path_distance(left: &Segments, right: &Segments, pairs: &mut [PathPair]) -> O
                 continue;
             }
         }
-        let d = min_distance_bezpath(left, p1, right, p2, &mut pair.closest);
+        let d = min_distance_bezpath(left, p1, right, p2, &mut pair.closest, near);
         // log::debug!("  d={:?}", d);
         if d.is_nan() {
             // Two curves that touch can measure as "not a number".
@@ -548,8 +575,9 @@ fn min_distance_bezpath(
     other: &Segments,
     path2: &Path,
     hint: &mut Option<(usize, usize)>,
+    near: &mut Vec<(PointBox, usize)>,
 ) -> f64 {
-    *hint = closest_segments(one, path1, other, path2, *hint);
+    *hint = closest_segments(one, path1, other, path2, *hint, near);
     if let Some((i1, i2)) = *hint {
         let (s1, s2) = (one.segs[i1], other.segs[i2]);
         // debug(&format!("Best pair was {:?}, {:?}", s1, s2));
@@ -582,8 +610,10 @@ fn min_distance_bezpath(
 // - Three points of one segment cannot be nearer to three points of
 //   another than the boxes around them are. So when two boxes are
 //   farther apart than the best pair so far, none of the segments in
-//   them needs looking at. We start with a pair that is likely to be
-//   close, to have a good "best so far" early.
+//   them needs looking at; and when a box is that far from the box
+//   around all the points of the other path, it need not be compared
+//   with any of that path's boxes. We start with a pair that is likely
+//   to be close, to have a good "best so far" early.
 // - The squares of the distances are compared first, which avoids
 //   three calls to hypot() for almost all pairs that are looked at.
 //
@@ -595,6 +625,7 @@ fn closest_segments(
     other: &Segments,
     path2: &Path,
     hint: Option<(usize, usize)>,
+    near: &mut Vec<(PointBox, usize)>,
 ) -> Option<(usize, usize)> {
     let points1 = &one.points[path1.segs.clone()];
     let points2 = &other.points[path2.segs.clone()];
@@ -607,7 +638,8 @@ fn closest_segments(
     };
 
     // Something to start with: the closest pair of the last round, or
-    // else the segments in the two boxes that are closest to each other.
+    // else the segments in the box of the first path that is nearest
+    // to the second path and the box of the second path nearest to it.
     let hint = hint.and_then(|(i1, i2)| {
         let i1 = i1.checked_sub(path1.segs.start)?;
         let i2 = i2.checked_sub(path2.segs.start)?;
@@ -615,34 +647,55 @@ fn closest_segments(
     });
     if let Some((i1, p1, i2, p2)) = hint {
         closest.offer(i1, p1, i2, p2);
-    } else {
-        let mut nearest = None;
-        let mut least = f64::INFINITY;
-        for (b1, box1) in boxes1.iter().enumerate() {
-            for (b2, box2) in boxes2.iter().enumerate() {
-                let gap = box_gap_squared(box1, box2);
-                if nearest.is_none() || gap < least {
-                    least = gap;
-                    nearest = Some((b1, b2));
-                }
-            }
-        }
-        if let Some((b1, b2)) = nearest {
+    } else if let Some((b1, box1)) = nearest_box(boxes1, &path2.points) {
+        if let Some((b2, _)) = nearest_box(boxes2, box1) {
             closest.offer_all(b1, points1, b2, points2);
         }
     }
 
+    // The boxes of the second path that are near enough to the first
+    // path to matter, and the box around those.
+    near.clear();
+    let mut around = SmallBox::new();
+    for (b2, box2) in boxes2.iter().enumerate() {
+        if box_gap_squared(box2, &path1.points) > closest.limit {
+            continue;
+        }
+        near.push((*box2, b2));
+        around.add(Point::new(box2[0], box2[2]));
+        around.add(Point::new(box2[1], box2[3]));
+    }
+    let around = around.get();
+
     for (b1, box1) in boxes1.iter().enumerate() {
-        for (b2, box2) in boxes2.iter().enumerate() {
+        if box_gap_squared(box1, &around) > closest.limit {
+            continue;
+        }
+        for (box2, b2) in near.iter() {
             if box_gap_squared(box1, box2) > closest.limit {
                 continue;
             }
-            closest.offer_all(b1, points1, b2, points2);
+            closest.offer_all(b1, points1, *b2, points2);
         }
     }
     closest
         .pair
         .map(|(i1, i2)| (path1.segs.start + i1, path2.segs.start + i2))
+}
+
+// Which of the boxes is nearest to another box.
+#[inline(always)]
+fn nearest_box<'a>(boxes: &'a [PointBox], to: &PointBox) -> Option<(usize, &'a PointBox)> {
+    let mut nearest = None;
+    let mut least = f64::INFINITY;
+    for (b, around) in boxes.iter().enumerate() {
+        let gap = box_gap_squared(around, to);
+        if nearest.is_none() || gap < least {
+            least = gap;
+            nearest = Some((b, around));
+        }
+    }
+    nearest
 }
 
 // The square of the distance between two boxes: no point of one box is

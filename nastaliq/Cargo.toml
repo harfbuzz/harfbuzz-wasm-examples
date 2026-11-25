@@ -18,3 +18,9 @@ harfbuzz-wasm = { path="../harfbuzz-wasm", features=["kurbo"]}
 # instructions and "z" many more.
 [profile.release]
 lto = "fat"
+
+# wasm-pack would run wasm-opt on the module, which puts back the local.tee
+# that the linker step takes out (see .cargo/config.toml) and gains nothing
+# else.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false

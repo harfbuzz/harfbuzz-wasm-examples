@@ -1,0 +1,202 @@
+#!/usr/bin/env python3
+"""Link a WebAssembly module, then rewrite every local.tee in it as
+local.set followed by local.get.
+
+Cargo runs this in place of the linker (see .cargo/config.toml): it runs
+rust-lld with the arguments it was given and then rewrites the module that
+rust-lld wrote.  It can also be run by hand on a module:
+
+    wasm-ld-untee <in.wasm> <out.wasm>
+
+Why: HarfBuzz runs a font's module in wasm-micro-runtime's fast interpreter,
+and limits how many instructions a shape() call may run.  That interpreter
+turns local.get into nothing (the operand is read from the local where it
+is) and folds a local.set into the instruction that computed the value, but
+runs a local.tee as an instruction of its own.  LLVM writes local.tee
+wherever a value is stored and used at once: about one executed instruction
+in nine in this shaper.  "local.tee x" and "local.set x, local.get x" mean
+the same thing, so the module computes what it computed before, in fewer
+instructions.
+
+Offsets into the code section change.  Nothing in a release build refers to
+them; debugging information would (it is not updated).
+"""
+import os
+import shlex
+import subprocess
+import sys
+
+
+def uleb(data, i):
+    result = shift = 0
+    while True:
+        b = data[i]
+        i += 1
+        result |= (b & 0x7F) << shift
+        if not b & 0x80:
+            return result, i
+        shift += 7
+
+
+def skip_leb(data, i):
+    while data[i] & 0x80:
+        i += 1
+    return i + 1
+
+
+def enc_uleb(n):
+    out = bytearray()
+    while True:
+        b = n & 0x7F
+        n >>= 7
+        if n:
+            out.append(b | 0x80)
+        else:
+            out.append(b)
+            return bytes(out)
+
+
+def untee_code(code, i, end):
+    """The instructions code[i:end], with each local.tee split in two."""
+    out = bytearray()
+    tees = 0
+    while i < end:
+        op = code[i]
+        start = i
+        i += 1
+        if op == 0x22:                              # local.tee x
+            j = skip_leb(code, i)
+            idx = code[i:j]
+            out += b"\x21" + idx + b"\x20" + idx    # local.set x, local.get x
+            i = j
+            tees += 1
+            continue
+        if op in (0x02, 0x03, 0x04,                 # block, loop, if: block type
+                  0x0C, 0x0D, 0x10, 0x12,           # br, br_if, call, return_call
+                  0x20, 0x21, 0x23, 0x24,           # local.get/set, global.get/set
+                  0x25, 0x26,                       # table.get/set
+                  0x3F, 0x40,                       # memory.size/grow
+                  0x41, 0x42,                       # i32.const, i64.const
+                  0xD0, 0xD2):                      # ref.null, ref.func
+            i = skip_leb(code, i)
+        elif op == 0x0E:                            # br_table
+            n, i = uleb(code, i)
+            for _ in range(n + 1):
+                i = skip_leb(code, i)
+        elif op in (0x11, 0x13):                    # call_indirect, return_call_indirect
+            i = skip_leb(code, i)
+            i = skip_leb(code, i)
+        elif op == 0x1C:                            # select with types
+            n, i = uleb(code, i)
+            i += n
+        elif 0x28 <= op <= 0x3E:                    # loads and stores: align, offset
+            i = skip_leb(code, i)
+            i = skip_leb(code, i)
+        elif op == 0x43:                            # f32.const
+            i += 4
+        elif op == 0x44:                            # f64.const
+            i += 8
+        elif op == 0xFC:                            # saturating conversions, bulk memory, tables
+            sub, i = uleb(code, i)
+            if sub <= 7:
+                pass
+            elif sub in (8, 10, 12, 14):
+                i = skip_leb(code, i)
+                i = skip_leb(code, i)
+            elif sub in (9, 11, 13, 15, 16, 17):
+                i = skip_leb(code, i)
+            else:
+                raise ValueError("instruction 0xfc %d is not known to this script" % sub)
+        elif (op in (0x00, 0x01, 0x05, 0x0B, 0x0F, 0x1A, 0x1B, 0xD1)
+              or 0x45 <= op <= 0xC4):
+            pass                                    # no immediate
+        else:
+            raise ValueError("instruction 0x%02x is not known to this script" % op)
+        out += code[start:i]
+    if i != end:
+        raise ValueError("an instruction runs past the end of its function")
+    return bytes(out), tees
+
+
+def untee(data):
+    """The module `data` without local.tee, and how many there were."""
+    if data[:8] != b"\0asm\x01\0\0\0":
+        raise ValueError("not a WebAssembly module")
+    out = bytearray(data[:8])
+    i = 8
+    tees = 0
+    while i < len(data):
+        sid = data[i]
+        size, body = uleb(data, i + 1)
+        end = body + size
+        if sid != 10:                               # all but the code section: as it is
+            out += data[i:end]
+            i = end
+            continue
+        count, j = uleb(data, body)
+        section = bytearray(enc_uleb(count))
+        for _ in range(count):
+            fsize, j = uleb(data, j)
+            fend = j + fsize
+            ndecl, k = uleb(data, j)                # declarations of locals: count, type
+            for _ in range(ndecl):
+                k = skip_leb(data, k)
+                k += 1
+            code, n = untee_code(data, k, fend)
+            tees += n
+            func = data[j:k] + code
+            section += enc_uleb(len(func)) + func
+            j = fend
+        if j != end:
+            raise ValueError("the code section does not end where it says")
+        out += bytes([10]) + enc_uleb(len(section)) + section
+        i = end
+    return bytes(out), tees
+
+
+def rewrite(src, dst):
+    with open(src, "rb") as f:
+        data = f.read()
+    out, tees = untee(data)
+    tmp = dst + ".untee"
+    with open(tmp, "wb") as f:
+        f.write(out)
+    os.replace(tmp, dst)
+    return tees
+
+
+def output_of(args):
+    """The file a linker command line writes."""
+    for k, a in enumerate(args):
+        if a == "-o" and k + 1 < len(args):
+            return args[k + 1]
+        if a.startswith("@"):                       # a response file
+            with open(a[1:], encoding="utf-8") as f:
+                found = output_of(shlex.split(f.read()))
+            if found:
+                return found
+    return None
+
+
+def main():
+    args = sys.argv[1:]
+    try:
+        if len(args) == 2 and not args[0].startswith("-"):
+            tees = rewrite(args[0], args[1])
+            print("wasm-ld-untee: %d local.tee rewritten" % tees, file=sys.stderr)
+            return 0
+        status = subprocess.call(["rust-lld"] + args)
+        if status:
+            return status
+        out = output_of(args)
+        if out is None:
+            raise ValueError("no -o among the linker's arguments")
+        rewrite(out, out)
+    except (OSError, ValueError, IndexError) as e:
+        print("wasm-ld-untee: %s" % e, file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,7 @@
+# HarfBuzz runs the module in wasm-micro-runtime's fast interpreter, which
+# runs a local.tee as an instruction of its own, while a local.set followed
+# by a local.get costs nothing.  wasm-ld-untee links with rust-lld, as cargo
+# does by itself, and then rewrites every local.tee as those two; see the top
+# of that file.  (It is a Python script, like ../bin/otfsurgeon.)
+[target.wasm32-unknown-unknown]
+linker = "./wasm-ld-untee"

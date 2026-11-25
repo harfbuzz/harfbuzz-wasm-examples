@@ -8,17 +8,63 @@ use kurbo::{Affine, BezPath, ParamCurve, PathEl, Point, QuadBez, Rect, Shape};
 pub fn get_scaled_outline(font: &Font, glyph: u32) -> Vec<BezPath> {
     let mut paths = font.get_outline(glyph);
     // Find a bounding box which encompasses all the paths.
-    if let Some(big_bounds) = bounding_box(&paths) {
+    if let Some((big_bounds, ordinary)) = bounding_box(&paths) {
         // Scale up 10% around the center.
         let center_vec = big_bounds.center().to_vec2();
         let affine = Affine::translate(center_vec * -1.0)
             * Affine::scale(1.12)
             * Affine::translate(center_vec);
-        for path in paths.iter_mut() {
-            apply_affine(path, affine);
+        // That comes to scaling by 1.12 and moving. If the outline's
+        // coordinates are ordinary numbers, we can do just that.
+        let [sx, b, c, sy, dx, dy] = affine.as_coeffs();
+        let zero = 0.0_f64.to_bits();
+        let minus_zero = (-0.0_f64).to_bits();
+        if ordinary
+            && b.to_bits() == zero
+            && c.to_bits() == zero
+            && dx.to_bits() != minus_zero
+            && dy.to_bits() != minus_zero
+        {
+            for path in paths.iter_mut() {
+                scale_and_move(path, sx, sy, dx, dy);
+            }
+        } else {
+            for path in paths.iter_mut() {
+                apply_affine(path, affine);
+            }
         }
     }
     paths
+}
+
+// This is path.apply_affine(affine) too, for a transform that scales
+// by `sx` and `sy` and then moves by `dx` and `dy`, and for when
+// the path's coordinates are finite and neither `dx` nor `dy` is a
+// negative zero. The full sum for x is sx * x + 0 * y + dx, and then
+// 0 * y is a zero which changes nothing: at most the sign of
+// another zero, which adding dx settles the same way either way.
+#[inline]
+fn scale_and_move(path: &mut BezPath, sx: f64, sy: f64, dx: f64, dy: f64) {
+    let moved = |p: &mut Point| {
+        p.x = sx * p.x + dx;
+        p.y = sy * p.y + dy;
+    };
+    for el in path.elements_mut() {
+        match el {
+            PathEl::MoveTo(p) => moved(p),
+            PathEl::LineTo(p) => moved(p),
+            PathEl::QuadTo(p1, p2) => {
+                moved(p1);
+                moved(p2);
+            }
+            PathEl::CurveTo(p1, p2, p3) => {
+                moved(p1);
+                moved(p2);
+                moved(p3);
+            }
+            PathEl::ClosePath => {}
+        }
+    }
 }
 
 // This is path.apply_affine(affine), spelled out so that it is
@@ -72,12 +118,14 @@ fn include(bounds: &mut Rect, p: Point) {
 }
 
 // The union of the bounding boxes of all the paths, as kurbo works
-// them out: None if there are no paths.
-fn kurbo_bounding_box(paths: &[BezPath]) -> Option<Rect> {
+// them out: None if there are no paths. (And "false": we did not look
+// at the coordinates ourselves.)
+fn kurbo_bounding_box(paths: &[BezPath]) -> Option<(Rect, bool)> {
     paths
         .iter()
         .map(|x| x.bounding_box())
         .reduce(|a, b| a.union(b))
+        .map(|bounds| (bounds, false))
 }
 
 // The same box as kurbo_bounding_box(), found in one pass over lines
@@ -91,8 +139,8 @@ fn kurbo_bounding_box(paths: &[BezPath]) -> Option<Rect> {
 //
 // This holds for coordinates that are ordinary numbers: finite, and
 // far from overflowing when added or multiplied by two. For any
-// others, kurbo is asked.
-fn bounding_box(paths: &[BezPath]) -> Option<Rect> {
+// others, kurbo is asked. With the box comes whether this found it.
+fn bounding_box(paths: &[BezPath]) -> Option<(Rect, bool)> {
     if paths.is_empty() {
         return None;
     }
@@ -196,5 +244,5 @@ fn bounding_box(paths: &[BezPath]) -> Option<Rect> {
     if !(squares < f64::INFINITY) {
         return kurbo_bounding_box(paths);
     }
-    Some(bounds)
+    Some((bounds, true))
 }

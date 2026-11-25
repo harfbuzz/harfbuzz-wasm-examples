@@ -1,6 +1,7 @@
 mod dist;
 mod glyph;
 mod mindist;
+mod outline;
 
 // Auto-kerning routine, look in dist.rs for this.
 use dist::{Kerner, Placed};
@@ -10,8 +11,8 @@ use harfbuzz_wasm::Font;
 // to represent a glyph. Here we use our own custom glyph
 // representation so we can do clever things with it.
 use glyph::{GlyphShape, GulzarBuffer};
-// Kurbo is a library for doing mathematics on bezier curves.
-use kurbo::{Affine, BezPath, Shape};
+// Getting the outline of a glyph ready, look in outline.rs.
+use outline::get_scaled_outline;
 
 use wasm_bindgen::prelude::*;
 
@@ -20,31 +21,6 @@ use wasm_bindgen::prelude::*;
 const KERN_DISTANCE: f32 = 300.0;
 const BARI_YE_DOT_POSITION: f32 = -150.0;
 const DOT_AVOIDANCE_DELTA: f32 = 50.0; // How much to move a colliding dot. Affects rendering speed.
-
-// Return a slightly scaled-up copy of a glyph's outline.
-// We create this slightly bigger copy of the glyphs so that
-// when we do collision tests between glyphs, they have a bit
-// of breathing space around them.
-fn get_scaled_outline(font: &Font, glyph: u32) -> Vec<BezPath> {
-    let mut paths = font.get_outline(glyph);
-    // Find a bounding box which encompasses all the paths by
-    // taking the union of all of their bounding boxes.
-    if let Some(big_bounds) = paths
-        .iter()
-        .map(|x| x.bounding_box())
-        .reduce(|a, b| a.union(b))
-    {
-        // Scale up 10% around the center.
-        let center_vec = big_bounds.center().to_vec2();
-        let affine = Affine::translate(center_vec * -1.0)
-            * Affine::scale(1.12)
-            * Affine::translate(center_vec);
-        for path in paths.iter_mut() {
-            path.apply_affine(affine);
-        }
-    }
-    paths
-}
 
 // Normally Harfbuzz buffers give you the advance for each glyph
 // but it turns out to be quite useful for us to keep a running

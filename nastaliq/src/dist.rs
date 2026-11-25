@@ -11,23 +11,40 @@ use kurbo::{BezPath, CubicBez, Line, ParamCurve, ParamCurveNearest, PathEl, Path
 // kern so that these paths are `target_distance` units apart.
 
 // The paths of a glyph, and how far the glyph is moved from where its
-// paths are.
+// paths are. `key` says which glyph this is: a Kerner takes two of
+// these with the same key to be the same glyph in the same place.
 #[derive(Clone, Copy)]
 pub struct Placed<'a> {
+    pub key: usize,
     pub paths: &'a [BezPath],
     pub dx: f64,
     pub dy: f64,
 }
 
 // What determine_kern() works with. It is kept from one call to the
-// next so that the memory is there already.
+// next so that the memory is there already, and so are the segments of
+// the last few glyphs: a glyph that is on the right of one kern is on
+// the left of the next ones.
 #[derive(Default)]
 pub struct Kerner {
+    kept: Vec<Kept>,
+    clock: u32,
     left: Segments,
     right: Segments,
     pairs: Vec<PathPair>,
     near: Vec<(PointBox, usize)>,
 }
+
+// The segments of a glyph where it is, and when they were last used.
+#[derive(Default)]
+struct Kept {
+    key: usize,
+    used: u32,
+    segments: Segments,
+}
+
+// How many glyphs are kept.
+const KEPT: usize = 5;
 
 impl Kerner {
     pub fn new() -> Self {
@@ -52,10 +69,10 @@ impl Kerner {
         let near = &mut self.near;
         left.clear();
         for glyph in left_glyphs {
-            left.add_glyph(glyph);
+            left.append(keep(&mut self.kept, &mut self.clock, glyph));
         }
         right.clear();
-        right.add_glyph(right_glyph);
+        right.append(keep(&mut self.kept, &mut self.clock, right_glyph));
         pairs.clear();
         pairs.resize(left.paths.len() * right.paths.len(), PathPair::default());
 
@@ -88,6 +105,40 @@ impl Kerner {
         }
         kern
     }
+}
+
+// The segments of a glyph where it is: those kept from the last time,
+// if it is one of the last few glyphs, or else worked out now, and kept
+// instead of those of the glyph that has not been used for longest.
+fn keep<'a>(kept: &'a mut Vec<Kept>, clock: &mut u32, glyph: &Placed) -> &'a Segments {
+    *clock += 1;
+    let mut oldest = 0;
+    let mut found = None;
+    for (i, one) in kept.iter().enumerate() {
+        if one.key == glyph.key {
+            found = Some(i);
+            break;
+        }
+        if one.used < kept[oldest].used {
+            oldest = i;
+        }
+    }
+    let i = match found {
+        Some(i) => i,
+        None => {
+            if kept.len() < KEPT {
+                oldest = kept.len();
+                kept.push(Kept::default());
+            }
+            let one = &mut kept[oldest];
+            one.key = glyph.key;
+            one.segments.clear();
+            one.segments.add_glyph(glyph);
+            oldest
+        }
+    };
+    kept[i].used = *clock;
+    &kept[i].segments
 }
 
 // How many segments of a path share a box.
@@ -143,6 +194,23 @@ impl Segments {
         for path in glyph.paths {
             self.add_path(path, glyph.dx, glyph.dy);
         }
+    }
+
+    // Add the segments of some other paths, as they are.
+    fn append(&mut self, other: &Segments) {
+        let (segs, boxes) = (self.segs.len(), self.boxes.len());
+        self.segs.extend_from_slice(&other.segs);
+        self.closers
+            .extend(other.closers.iter().map(|closer| closer + segs));
+        self.cubics |= other.cubics;
+        self.points.extend_from_slice(&other.points);
+        self.boxes.extend_from_slice(&other.boxes);
+        self.paths.extend(other.paths.iter().map(|path| Path {
+            segs: path.segs.start + segs..path.segs.end + segs,
+            boxes: path.boxes.start + boxes..path.boxes.end + boxes,
+            around: path.around,
+            points: path.points,
+        }));
     }
 
     // Add a path moved by (dx, dy): its segments, their points and the

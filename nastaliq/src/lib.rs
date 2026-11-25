@@ -78,10 +78,11 @@ fn prepare_buffer(buffer: &mut GulzarBuffer, font: &Font) {
     set_total_advance(buffer)
 }
 
-// The paths of a glyph and where the glyph is, i.e. including the
-// full running-total x advance, for the kerning routine.
-fn placed(item: &glyph::GulzarGlyph) -> Placed<'_> {
+// The paths of a glyph of the buffer and where the glyph is, i.e.
+// including the full running-total x advance, for the kerning routine.
+fn placed(ix: usize, item: &glyph::GulzarGlyph) -> Placed<'_> {
     Placed {
+        key: ix,
         paths: &item.paths,
         dx: (item.x_total_advance + item.x_offset) as f64,
         dy: item.y_offset as f64,
@@ -193,8 +194,8 @@ pub fn shape(
 
         // Now we have a left glyph and a right glyph.
         if let Some(to_kern_with) = to_kern_with {
-            let mut left_glyphs = [placed(this_item); 3];
-            let other_glyph = placed(&buffer.glyphs[to_kern_with]);
+            let mut left_glyphs = [placed(ix, this_item); 3];
+            let other_glyph = placed(to_kern_with, &buffer.glyphs[to_kern_with]);
             // We're actually going to extend those paths with
             // some more context on the left side,
             // to deal with things like بلی - the choti ye is part
@@ -207,6 +208,7 @@ pub fn shape(
                     break;
                 }
                 if let Some(next) = buffer.glyphs.get(ix3) {
+                    let next_ix = ix3;
                     ix3 -= 1;
                     // Ignore dots for the purposes of kerning.
                     // We deal with them later.
@@ -214,7 +216,7 @@ pub fn shape(
                         continue;
                     }
                     counter += 1;
-                    left_glyphs[counter] = placed(next);
+                    left_glyphs[counter] = placed(next_ix, next);
                 } else {
                     break;
                 }

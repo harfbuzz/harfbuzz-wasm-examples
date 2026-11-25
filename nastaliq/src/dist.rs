@@ -1,6 +1,6 @@
 use core::cmp::Ordering;
 use harfbuzz_wasm::debug;
-use kurbo::{Affine, BezPath, ParamCurve, ParamCurveNearest, PathSeg};
+use kurbo::{Affine, BezPath, ParamCurve, ParamCurveNearest, PathSeg, Point};
 
 // This is a Rust port of the Nastaliq kerning algorithm
 // detailed at https://simoncozens.github.io/nastaliq-autokerning/
@@ -56,9 +56,12 @@ pub fn determine_kern(
 // way to work out how far apart two sets of paths are at their closest
 // point. A real algorithm should use linesweep.
 pub fn path_distance(left_paths: &[BezPath], right_paths: &[BezPath]) -> Option<f32> {
+    // Sample each path once, not once for every segment it is compared with.
+    let left_paths: Vec<Vec<Sampled>> = left_paths.iter().map(sample).collect();
+    let right_paths: Vec<Vec<Sampled>> = right_paths.iter().map(sample).collect();
     let mut min_distance: Option<f64> = None;
-    for p1 in left_paths {
-        for p2 in right_paths {
+    for p1 in &left_paths {
+        for p2 in &right_paths {
             let d = min_distance_bezpath(p1, p2);
             // log::debug!("  d={:?}", d);
             if min_distance.is_none() || d < min_distance.unwrap() {
@@ -72,15 +75,21 @@ pub fn path_distance(left_paths: &[BezPath], right_paths: &[BezPath]) -> Option<
     min_distance.map(|x| x as f32)
 }
 
+// A segment, and the three points on it that segments are first compared by.
+type Sampled = (PathSeg, [Point; 3]);
+
+fn sample(path: &BezPath) -> Vec<Sampled> {
+    path.segments()
+        .map(|seg| (seg, [seg.eval(0.0), seg.eval(0.5), seg.eval(1.0)]))
+        .collect()
+}
+
 // Work out which are the closest pair of segments. I'm sure there's
 // a better way to do this than just trying all combinations.
-fn min_distance_bezpath(one: &BezPath, other: &BezPath) -> f64 {
-    let segs1 = one.segments();
+fn min_distance_bezpath(one: &[Sampled], other: &[Sampled]) -> f64 {
     let mut best_pair: Option<(f64, kurbo::PathSeg, kurbo::PathSeg)> = None;
-    for s1 in segs1 {
-        let p1 = vec![s1.eval(0.0), s1.eval(0.5), s1.eval(1.0)];
-        for s2 in other.segments() {
-            let p2 = vec![s2.eval(0.0), s2.eval(0.5), s2.eval(1.0)];
+    for (s1, p1) in one {
+        for (s2, p2) in other {
             let dist = p1
                 .iter()
                 .zip(p2.iter())
@@ -92,7 +101,7 @@ fn min_distance_bezpath(one: &BezPath, other: &BezPath) -> f64 {
                     continue;
                 }
             }
-            best_pair = Some((dist, s1, s2));
+            best_pair = Some((dist, *s1, *s2));
         }
     }
     if let Some((_, s1, s2)) = best_pair {

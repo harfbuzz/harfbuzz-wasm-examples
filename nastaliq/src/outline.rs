@@ -91,7 +91,7 @@ fn apply_affine(path: &mut BezPath, affine: Affine) {
 }
 
 // A box with nothing in it yet.
-const NOTHING: Rect = Rect::new(
+pub const NOTHING: Rect = Rect::new(
     f64::INFINITY,
     f64::INFINITY,
     f64::NEG_INFINITY,
@@ -102,7 +102,7 @@ const NOTHING: Rect = Rect::new(
 // same of ordinary numbers, but it gets there through fmin() and
 // fmax(), which are functions to call here, four times for a point.
 #[inline]
-fn include(bounds: &mut Rect, p: Point) {
+pub fn include(bounds: &mut Rect, p: Point) {
     if p.x < bounds.x0 {
         bounds.x0 = p.x;
     }

@@ -1,6 +1,6 @@
-use crate::outline::get_scaled_outline;
+use crate::outline::{get_scaled_outline, include, NOTHING};
 use harfbuzz_wasm::{Buffer, BufferItem, CGlyphExtents, CGlyphInfo, CGlyphPosition, Font};
-use kurbo::{flatten, Affine, BezPath, PathEl, Point};
+use kurbo::{flatten, Affine, BezPath, PathEl, Point, Rect};
 use std::cell::OnceCell;
 
 // The kinds of glyph we treat differently. A glyph can be of several kinds.
@@ -24,6 +24,8 @@ pub struct GlyphShape {
     glyph: u32,
     outline: OnceCell<Vec<BezPath>>,
     extents: OnceCell<CGlyphExtents>,
+    // The same goes for the outline as collision tests want it.
+    corners: OnceCell<Option<Corners>>,
 }
 
 impl GlyphShape {
@@ -58,6 +60,7 @@ impl GlyphShape {
             glyph,
             outline: OnceCell::new(),
             extents: OnceCell::new(),
+            corners: OnceCell::new(),
         }
     }
 
@@ -231,6 +234,190 @@ fn cross(a: &Segment, b: &Segment) -> bool {
     (0.0..=1.0).contains(&u)
 }
 
+// Collision tests flatten outlines into line segments, with a
+// tolerance so loose (fifty times the font's scale) that every curve
+// of a glyph comes out as one line, from its start to its end. When
+// we can be sure of that for an outline, wherever its glyph is put,
+// we need not ask kurbo to flatten it every time: the flattened path
+// is its corners, the points where its lines and curves end, moved to
+// where the glyph is. These are the corners, where the glyph was drawn.
+//
+// "Sure" needs three things, and where one is missing we flatten the
+// long way:
+//
+// - Each path is a MoveTo, then lines and quadratic curves, then a
+//   ClosePath. This is how glyf outlines come.
+//
+// - Every coordinate is a multiple of 2^-62, and no bigger than 2^40.
+//   (Any number from 2^-10 up is such a multiple.) A glyph is moved by
+//   whole numbers, so everywhere it is put its coordinates, their
+//   differences and the products of two differences stay on a grid,
+//   and the sums in kurbo's estimate and in cross() neither overflow
+//   nor underflow: each is right to a few parts in 2^53.
+//
+// - The two legs of a curve's control polygon are no longer than
+//   1/32 of the tolerance. Kurbo estimates how many lines a curve
+//   needs from where it sits on the parabola y = x^2: with the ends at
+//   x0 and x2 and the parabola scaled by s, the count is
+//   ceil(0.5 * val / sqrt(tolerance)), where val is
+//   |a(x2) - a(x0)| * sqrt(s) when the ends are on one side of the
+//   vertex, and sqrt(tolerance) * |a(x2) - a(x0)| / a(sqrt(tolerance / s))
+//   when the vertex is between them; a(x) is its approximate integral
+//   x / (0.33 + (0.67^4 + x^2 / 4)^(1/4)). It has |x0| * cross <=
+//   leg01 * |dd| and |x2| * cross <= leg12 * |dd|, and s = cross /
+//   (|dd| * |x2 - x0|), for its cross product and second difference dd.
+//   Since a() rises no faster than x, val^2 <= leg01 + leg12 in the
+//   first case, far below 4 * tolerance. In the second, s * x0^2 <=
+//   leg01 and s * x2^2 <= leg12 make |x0| and |x2| at most a quarter
+//   of sqrt(tolerance / s) once the legs are within tolerance / 16,
+//   and a(x / 4) <= a(x) / 2, so val <= sqrt(tolerance). Either way
+//   the count is one. The rounding of a few parts in 2^53 at each
+//   step, and of moving the glyph, fits in the factor of two that
+//   1/32 leaves.
+#[derive(Debug)]
+struct Corners {
+    // The corners of all the paths, one path after another...
+    points: Vec<Point>,
+    // ...and how many of them belong to each path.
+    lengths: Vec<usize>,
+    // The box around them, the longest a segment between two of
+    // them gets in x or in y, and the biggest coordinate.
+    bounds: Rect,
+    reach: f64,
+    biggest: f64,
+}
+
+impl Corners {
+    fn of(paths: &[BezPath], tolerance: f64) -> Option<Corners> {
+        // The font's scale is a whole number: this says it is positive.
+        if !(tolerance >= 50.0) {
+            return None;
+        }
+        // Is this a multiple of 2^-62 no bigger than 2^40? From
+        // 2^-10 up, every number is such a multiple.
+        let plain = |v: f64| {
+            let scaled = v * 4611686018427387904.0;
+            v.abs() <= 1099511627776.0 && (v.abs() >= 0.0009765625 || scaled.trunc() == scaled)
+        };
+        let longest = tolerance / 32.0;
+        let mut corners = Corners {
+            points: Vec::with_capacity(paths.iter().map(|path| path.elements().len()).sum()),
+            lengths: Vec::with_capacity(paths.len()),
+            bounds: NOTHING,
+            reach: 0.0,
+            biggest: 0.0,
+        };
+        // A segment between two corners: note how far it reaches.
+        let join = |reach: &mut f64, from: Point, to: Point| {
+            for long in [(to.x - from.x).abs(), (to.y - from.y).abs()] {
+                if long > *reach {
+                    *reach = long;
+                }
+            }
+        };
+        for path in paths {
+            let (first, rest) = path.elements().split_first()?;
+            let (last, middle) = rest.split_last()?;
+            let (&PathEl::MoveTo(start), PathEl::ClosePath) = (first, last) else {
+                return None;
+            };
+            if !(plain(start.x) && plain(start.y)) {
+                return None;
+            }
+            let begin = corners.points.len();
+            corners.points.push(start);
+            include(&mut corners.bounds, start);
+            let mut from = start;
+            for el in middle {
+                let to = match *el {
+                    PathEl::LineTo(p) => p,
+                    PathEl::QuadTo(p1, p2) => {
+                        let legs = [
+                            (p1.x - from.x).abs() + (p1.y - from.y).abs(),
+                            (p2.x - p1.x).abs() + (p2.y - p1.y).abs(),
+                        ];
+                        if !(plain(p1.x) && plain(p1.y) && legs[0] <= longest && legs[1] <= longest)
+                        {
+                            return None;
+                        }
+                        p2
+                    }
+                    _ => return None,
+                };
+                if !(plain(to.x) && plain(to.y)) {
+                    return None;
+                }
+                corners.points.push(to);
+                include(&mut corners.bounds, to);
+                join(&mut corners.reach, from, to);
+                from = to;
+            }
+            // The last corner is joined to the first.
+            join(&mut corners.reach, from, start);
+            corners.lengths.push(corners.points.len() - begin);
+        }
+        // The biggest coordinate is on the box.
+        let bounds = corners.bounds;
+        for big in [
+            bounds.x0.abs(),
+            bounds.y0.abs(),
+            bounds.x1.abs(),
+            bounds.y1.abs(),
+        ] {
+            if big > corners.biggest {
+                corners.biggest = big;
+            }
+        }
+        Some(corners)
+    }
+
+    // The segments between the corners that have a part within
+    // `margin` of the box `near`, for a glyph at `at`: as segments
+    // for cross() in `segments`, and their own box, where the glyph
+    // was drawn, as the result. `near` is where the glyph was drawn
+    // too. A segment is left out only when both its ends are beyond
+    // the same side of the box by more than the margin.
+    fn near(&self, near: Rect, margin: f64, at: (f64, f64), segments: &mut Vec<Segment>) -> Rect {
+        let (x0, x1) = (near.x0 - margin, near.x1 + margin);
+        let (y0, y1) = (near.y0 - margin, near.y1 + margin);
+        let mut found = NOTHING;
+        let mut begin = 0;
+        for length in &self.lengths {
+            let path = &self.points[begin..begin + length];
+            begin += length;
+            // The last corner is joined to the first.
+            let mut from = path[length - 1];
+            for &to in path {
+                if !((from.x < x0 && to.x < x0)
+                    || (from.x > x1 && to.x > x1)
+                    || (from.y < y0 && to.y < y0)
+                    || (from.y > y1 && to.y > y1))
+                {
+                    include(&mut found, from);
+                    include(&mut found, to);
+                    // The glyph's paths are positioned by adding
+                    // where it is to every point.
+                    segments.push(Segment::new(
+                        Point::new(from.x + at.0, from.y + at.1),
+                        Point::new(to.x + at.0, to.y + at.1),
+                    ));
+                }
+                from = to;
+            }
+        }
+        found
+    }
+}
+
+impl GlyphShape {
+    // The corners of the outline, if the collision tests can use them.
+    fn corners(&self, font: &Font, tolerance: f64) -> Option<&Corners> {
+        self.corners
+            .get_or_init(|| Corners::of(self.outline(font), tolerance))
+            .as_ref()
+    }
+}
+
 // How far apart in the buffer two glyphs can be for us to remember
 // whether they collide: from NEAR glyphs before to NEAR - 1 after.
 // The dot avoidance loops look no further than that.
@@ -241,10 +428,10 @@ const NOT_ASKED: u8 = 0;
 const APART: u8 = 1;
 const COLLIDING: u8 = 2;
 
-// Collision detector for the glyphs of a buffer. Still terribly
-// inefficient, but it remembers what it has worked out until a glyph
-// moves (tell it with moved()): the bounding box of every glyph and
-// whether a glyph collides with each of those near it.
+// Collision detector for the glyphs of a buffer. It remembers what
+// it has worked out until a glyph moves (tell it with moved()): the
+// bounding box of every glyph and whether a glyph collides with each
+// of those near it.
 pub struct Collider<'a> {
     shapes: &'a [GlyphShape],
     font: &'a Font,
@@ -338,22 +525,110 @@ impl<'a> Collider<'a> {
         );
         self.mine.clear();
         self.theirs.clear();
-        let my_paths = self.shapes[me.shape].outline(self.font);
-        let their_paths = self.shapes[them.shape].outline(self.font);
-        Self::flatten(
-            my_paths,
-            my_place,
-            self.tolerance,
-            &mut self.points,
-            &mut self.mine,
-        );
-        Self::flatten(
-            their_paths,
-            their_place,
-            self.tolerance,
-            &mut self.points,
-            &mut self.theirs,
-        );
+        let my_corners = self.shapes[me.shape].corners(self.font, self.tolerance);
+        let their_corners = self.shapes[them.shape].corners(self.font, self.tolerance);
+        if let (Some(mine), Some(theirs)) = (my_corners, their_corners) {
+            // The outlines are their corners. We only need the
+            // segments of each that come near the other.
+            //
+            // How near? cross() (kurbo's test) says two segments
+            // cross when |det| >= 1e-9 and t and u, two quotients
+            // by det, are in [-1e-9, 1 + 1e-9] and [0, 1]. The
+            // three numerators are each a difference of two products
+            // of differences of coordinates, and for those there is
+            // an identity: det * e + u_top * d - t_top * l = 0, with e
+            // from the start of one segment to the start of the
+            // other, and d and l the two segments. So the point of
+            // one at u and the point of the other at t are apart, in
+            // x and in y, by what rounding puts into that sum,
+            // divided by det: at most 12 * 2^-53 * |e| * |d| * |l| /
+            // 1e-9, less than 1.34e-6 * |e| * |d| * |l|, and by 1e-9 * |l|
+            // more for the slack in t. Segments further apart than
+            // that, in x or in y, cannot cross: for long segments
+            // rounding does make kurbo see crossings between
+            // segments that lie along one line some way apart, and
+            // this bound is what keeps those.
+            //
+            // The sizes: of |e|, the box around both outlines; of
+            // |d| and |l|, the reach of the outlines; and all of
+            // them, and the margin, padded for the rounding of
+            // moving the glyphs, a few times 2^-53 of the biggest
+            // coordinate there is.
+            let shift = (their_place.0 - my_place.0, their_place.1 - my_place.1);
+            let slack = 64.0
+                * (f64::EPSILON / 2.0)
+                * (mine.biggest.max(theirs.biggest)
+                    + my_place
+                        .0
+                        .abs()
+                        .max(my_place.1.abs())
+                        .max(their_place.0.abs())
+                        .max(their_place.1.abs()));
+            let mut both = mine.bounds;
+            include(
+                &mut both,
+                Point::new(theirs.bounds.x0 + shift.0, theirs.bounds.y0 + shift.1),
+            );
+            include(
+                &mut both,
+                Point::new(theirs.bounds.x1 + shift.0, theirs.bounds.y1 + shift.1),
+            );
+            let size = if both.width() > both.height() {
+                both.width()
+            } else {
+                both.height()
+            } + slack;
+            let (my_reach, their_reach) = (mine.reach + slack, theirs.reach + slack);
+            let margin = 1.34e-6 * size * my_reach * their_reach
+                + 1.01e-9 * (size + my_reach + their_reach)
+                + slack;
+            // Their segments near my outline; then my segments near
+            // those. Each box is moved to where the other glyph was
+            // drawn.
+            let found = theirs.near(
+                Rect::new(
+                    mine.bounds.x0 - shift.0,
+                    mine.bounds.y0 - shift.1,
+                    mine.bounds.x1 - shift.0,
+                    mine.bounds.y1 - shift.1,
+                ),
+                margin,
+                their_place,
+                &mut self.theirs,
+            );
+            if self.theirs.is_empty() {
+                return false;
+            }
+            mine.near(
+                Rect::new(
+                    found.x0 + shift.0,
+                    found.y0 + shift.1,
+                    found.x1 + shift.0,
+                    found.y1 + shift.1,
+                ),
+                margin,
+                my_place,
+                &mut self.mine,
+            );
+        } else {
+            // Flatten them the long way, all of them.
+            let my_paths = self.shapes[me.shape].outline(self.font);
+            let their_paths = self.shapes[them.shape].outline(self.font);
+            Self::flatten(
+                my_paths,
+                my_place,
+                self.tolerance,
+                &mut self.points,
+                &mut self.mine,
+            );
+            Self::flatten(
+                their_paths,
+                their_place,
+                self.tolerance,
+                &mut self.points,
+                &mut self.theirs,
+            );
+        }
         // We could do line sweep or something here, but proof of concept...
         let theirs = &self.theirs;
         self.mine.iter().any(|a| theirs.iter().any(|b| cross(a, b)))

@@ -11,13 +11,12 @@ pub const ISOL: u8 = 1 << 4;
 pub const FINA: u8 = 1 << 5;
 pub const SPACE: u8 = 1 << 6;
 
-// What we need to know about a glyph ID: its name, what kinds of glyph
-// that makes it, and its outline. Finding these out is expensive, and a
+// What we need to know about a glyph ID: what kinds of glyph its name
+// makes it, and its outline. Finding these out is expensive, and a
 // buffer has the same few glyph IDs over and over, so we do it once for
 // each glyph ID and let all the glyphs with that ID share the result.
 #[derive(Debug)]
 pub struct GlyphShape {
-    pub name: String,
     pub kinds: u8,
     pub paths: Vec<BezPath>,
 }
@@ -26,7 +25,7 @@ impl GlyphShape {
     // These rules will obviously need to be customized
     // for each font, but maybe in a production Nastaliq shaper
     // they would be driven from data in a font table.
-    pub fn new(name: String, paths: Vec<BezPath>) -> Self {
+    pub fn new(name: &str, paths: Vec<BezPath>) -> Self {
         let mut kinds = 0;
         if name.ends_with("BelowNS") || name.ends_with("HehCommaNS") {
             kinds |= DOT_BELOW;
@@ -49,7 +48,7 @@ impl GlyphShape {
                 _ => {}
             }
         }
-        Self { name, kinds, paths }
+        Self { kinds, paths }
     }
 }
 

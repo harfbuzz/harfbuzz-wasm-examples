@@ -5,7 +5,7 @@ mod mindist;
 // Auto-kerning routine, look in dist.rs for this.
 use dist::{Kerner, Placed};
 // Routines for interfacing with Harfbuzz
-use harfbuzz_wasm::{debug, Font};
+use harfbuzz_wasm::Font;
 // With the Harfbuzz interface, we can choose how we want
 // to represent a glyph. Here we use our own custom glyph
 // representation so we can do clever things with it.
@@ -80,7 +80,7 @@ fn prepare_buffer(buffer: &mut GulzarBuffer, font: &Font) -> Vec<GlyphShape> {
             slot &= seen.len() - 1;
             if seen[slot].1 == 0 {
                 shapes.push(GlyphShape::new(
-                    font.get_glyph_name(item.codepoint),
+                    &font.get_glyph_name(item.codepoint),
                     get_scaled_outline(font, item.codepoint),
                 ));
                 seen[slot] = (item.codepoint, shapes.len());
@@ -156,10 +156,6 @@ pub fn shape(
             // the init glyph so that we clear the tail. (Otherwise
             // in ابے the alif clashes with the bari ye.)
             if item.is_init() && remainder > 0 {
-                debug(&format!(
-                    "Adding {:} advance to {:} to fill bari-ye tail",
-                    remainder, shapes[item.shape].name
-                ));
                 item.x_advance += (remainder as f32 / scale_factor) as i32;
                 remainder = 0;
             } else {

@@ -22,8 +22,7 @@ pub fn determine_kern(
     let mut left = Segments::new(left_paths);
     left.sample();
     let mut right = Segments::new(right_paths);
-    // The closest segments of each pair of paths in the last round.
-    let mut closest = vec![None; left.ends.len() * right.ends.len()];
+    let mut pairs = vec![PathPair::default(); left.ends.len() * right.ends.len()];
 
     let mut minimum_possible = -1000.0 * scale_factor;
     let mut iterations = 0;
@@ -37,7 +36,7 @@ pub fn determine_kern(
         // Work out how far they are away at closest point, work out the
         // kern, move the right hand paths and iterate.
         right.sample();
-        if let Some(md) = path_distance(&left, &right, &mut closest) {
+        if let Some(md) = path_distance(&left, &right, &mut pairs) {
             min_distance = md;
             let this_kern = target_distance - min_distance;
             kern += this_kern;
@@ -62,6 +61,29 @@ const BOXED: usize = 4;
 // and the greatest y.
 type PointBox = [f64; 4];
 
+const EMPTY_BOX: PointBox = [
+    f64::INFINITY,
+    f64::NEG_INFINITY,
+    f64::INFINITY,
+    f64::NEG_INFINITY,
+];
+
+#[inline(always)]
+fn add_to_box(around: &mut PointBox, p: Point) {
+    if p.x < around[0] {
+        around[0] = p.x;
+    }
+    if p.x > around[1] {
+        around[1] = p.x;
+    }
+    if p.y < around[2] {
+        around[2] = p.y;
+    }
+    if p.y > around[3] {
+        around[3] = p.y;
+    }
+}
+
 // The segments of some paths, and the three points on each segment that
 // segments are first compared by.
 struct Segments {
@@ -78,6 +100,12 @@ struct Segments {
     // A box around the points of every BOXED segments of a path: the
     // boxes of the first path, then those of the second, and so on.
     boxes: Vec<PointBox>,
+    // The segments and boxes of each path.
+    paths: Vec<PathRange>,
+    // A box around all the control points of each path.
+    around: Vec<PointBox>,
+    // Whether there is a cubic segment.
+    cubics: bool,
 }
 
 // The segments of one path, and the boxes around their points.
@@ -96,10 +124,30 @@ impl Segments {
             pending: None,
             points: vec![],
             boxes: vec![],
+            paths: Vec::with_capacity(paths.len()),
+            around: Vec::with_capacity(paths.len()),
+            cubics: false,
         };
         for path in paths {
+            let start = this.segs.len();
             this.add_path(path);
             this.ends.push(this.segs.len());
+            let mut around = EMPTY_BOX;
+            for seg in &this.segs[start..] {
+                match seg {
+                    PathSeg::Line(l) => {
+                        add_to_box(&mut around, l.p0);
+                        add_to_box(&mut around, l.p1);
+                    }
+                    PathSeg::Quad(q) => {
+                        add_to_box(&mut around, q.p0);
+                        add_to_box(&mut around, q.p1);
+                        add_to_box(&mut around, q.p2);
+                    }
+                    PathSeg::Cubic(_) => this.cubics = true,
+                }
+            }
+            this.around.push(around);
         }
         this
     }
@@ -147,22 +195,6 @@ impl Segments {
         }
     }
 
-    // The segments and boxes of one path after the other.
-    fn paths(&self) -> impl Iterator<Item = PathRange> + Clone + '_ {
-        let mut seg_start = 0;
-        let mut box_start = 0;
-        self.ends.iter().map(move |&seg_end| {
-            let box_end = box_start + (seg_end - seg_start + BOXED - 1) / BOXED;
-            let range = PathRange {
-                segs: seg_start..seg_end,
-                boxes: box_start..box_end,
-            };
-            seg_start = seg_end;
-            box_start = box_end;
-            range
-        })
-    }
-
     // Move the segments along x, the next time they are sampled.
     fn move_by(&mut self, dx: f64) {
         self.pending = Some(dx);
@@ -194,6 +226,12 @@ impl Segments {
                 }
             }
             self.drop_closed();
+            // Adding to the least and to the greatest x of the points
+            // gives the least and the greatest x of the moved points.
+            for around in self.around.iter_mut() {
+                around[0] += dx;
+                around[1] += dx;
+            }
         }
         self.points.clear();
         self.points.extend(self.segs.iter().map(|seg| match seg {
@@ -202,26 +240,21 @@ impl Segments {
             PathSeg::Cubic(c) => [c.eval(0.0), c.eval(0.5), c.eval(1.0)],
         }));
         self.boxes.clear();
+        self.paths.clear();
         let mut start = 0;
         for &end in &self.ends {
+            let box_start = self.boxes.len();
             for points in self.points[start..end].chunks(BOXED) {
-                let mut around = [f64::INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::NEG_INFINITY];
-                for p in points.iter().flatten() {
-                    if p.x < around[0] {
-                        around[0] = p.x;
-                    }
-                    if p.x > around[1] {
-                        around[1] = p.x;
-                    }
-                    if p.y < around[2] {
-                        around[2] = p.y;
-                    }
-                    if p.y > around[3] {
-                        around[3] = p.y;
-                    }
+                let mut around = EMPTY_BOX;
+                for &p in points.iter().flatten() {
+                    add_to_box(&mut around, p);
                 }
                 self.boxes.push(around);
             }
+            self.paths.push(PathRange {
+                segs: start..end,
+                boxes: box_start..self.boxes.len(),
+            });
             start = end;
         }
     }
@@ -254,32 +287,115 @@ impl Segments {
     }
 }
 
+// What we keep about a pair of paths, one from each side.
+#[derive(Clone, Copy, Default)]
+struct PathPair {
+    // The closest segments in the last round the pair was measured in.
+    closest: Option<(usize, usize)>,
+    // The square of a distance the paths are at least apart in this
+    // round, whatever way they are measured.
+    apart: f64,
+}
+
 // The rest of the code is just a terribly inefficient and inaccurate
 // way to work out how far apart two sets of paths are at their closest
 // point. A real algorithm should use linesweep.
-fn path_distance(
-    left: &Segments,
-    right: &Segments,
-    closest: &mut [Option<(usize, usize)>],
-) -> Option<f32> {
-    let mut min_distance: Option<f64> = None;
-    let mut closest = closest.iter_mut();
-    for p1 in left.paths() {
-        for p2 in right.paths() {
-            let d = match closest.next() {
-                Some(hint) => min_distance_bezpath(left, &p1, right, &p2, hint),
-                None => min_distance_bezpath(left, &p1, right, &p2, &mut None),
-            };
-            // log::debug!("  d={:?}", d);
-            if min_distance.is_none() || d < min_distance.unwrap() {
-                // log::debug!("    (new record)");
-                min_distance = Some(d)
-            } else {
-                // log::debug!("    (ignored)");
+//
+// The distance is the smallest of the distances between a left and a
+// right path. It used to measure every such pair of paths. It need
+// not: a pair whose boxes are farther apart than a pair that has been
+// measured already cannot be the smallest, so we measure first the
+// pair whose boxes are nearest and then only the pairs that could
+// still beat the smallest so far.
+fn path_distance(left: &Segments, right: &Segments, pairs: &mut [PathPair]) -> Option<f32> {
+    // The pair whose boxes are nearest to each other.
+    let mut nearest = 0;
+    let mut least = f64::INFINITY;
+    let mut all = pairs.iter_mut().enumerate();
+    for box1 in &left.around {
+        for box2 in &right.around {
+            if let Some((k, pair)) = all.next() {
+                pair.apart = if left.cubics || right.cubics {
+                    // Cubics are not measured at all, see below.
+                    f64::NEG_INFINITY
+                } else {
+                    at_least_apart(box1, box2)
+                };
+                if pair.apart < least {
+                    least = pair.apart;
+                    nearest = k;
+                }
             }
         }
     }
+
+    let mut min_distance: Option<f64> = None;
+    let width = right.paths.len();
+    let first = [nearest];
+    for k in first.into_iter().chain(0..pairs.len()) {
+        let (Some(pair), Some(p1), Some(p2)) = (
+            pairs.get_mut(k),
+            left.paths.get(k / width.max(1)),
+            right.paths.get(k % width.max(1)),
+        ) else {
+            continue;
+        };
+        if let Some(min) = min_distance {
+            // This pair is farther apart than one we have measured, or
+            // it is that one.
+            if farther(pair.apart, min) || k == nearest {
+                continue;
+            }
+        }
+        let d = min_distance_bezpath(left, p1, right, p2, &mut pair.closest);
+        // log::debug!("  d={:?}", d);
+        if d.is_nan() {
+            // Two curves that touch can measure as "not a number".
+            // Going through the pairs in order, that is what the whole
+            // result was if it happened to the very first pair, and
+            // something to ignore for any other pair.
+            if k == 0 {
+                return Some(d as f32);
+            }
+        } else if min_distance.is_none() || d < min_distance.unwrap() {
+            // log::debug!("    (new record)");
+            min_distance = Some(d)
+        } else {
+            // log::debug!("    (ignored)");
+        }
+    }
     min_distance.map(|x| x as f32)
+}
+
+// The square of a distance that two paths are certainly measured to be
+// at least apart, given the boxes around their control points.
+//
+// Each of the ways of measuring below gives the distance between a
+// point of one segment and a point of another, or rather its square,
+// worked out in floating point. Points of a segment are inside the box
+// around its control points, so the true value is at least the square
+// of the gap between the boxes. The rounding errors of the worked out
+// value can be bounded in terms of the largest coordinate M: they are
+// below 2^-44 M^2 for the Bernstein form that kurbo's min_dist() uses
+// (it subtracts squares of coordinates, which is where most of it
+// comes from) and smaller for the others. We allow 2^-36 M^2.
+#[inline(always)]
+fn at_least_apart(a: &PointBox, b: &PointBox) -> f64 {
+    let mut largest = 0.0;
+    for &coordinate in a.iter().chain(b.iter()) {
+        if coordinate.abs() > largest {
+            largest = coordinate.abs();
+        }
+    }
+    const ROUNDING: f64 = 1.0 / (1u64 << 36) as f64;
+    box_gap_squared(a, b) * (1.0 - 1e-9) - ROUNDING * largest * largest
+}
+
+// Whether paths that are at least the square root of `apart` apart are
+// farther apart than `distance`.
+#[inline(always)]
+fn farther(apart: f64, distance: f64) -> bool {
+    apart > distance * distance * (1.0 + 1e-9)
 }
 
 // Work out which are the closest pair of segments, and how far apart

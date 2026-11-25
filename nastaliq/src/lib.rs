@@ -9,7 +9,7 @@ use harfbuzz_wasm::{debug, Font};
 // With the Harfbuzz interface, we can choose how we want
 // to represent a glyph. Here we use our own custom glyph
 // representation so we can do clever things with it.
-use glyph::GulzarBuffer;
+use glyph::{GlyphShape, GulzarBuffer};
 // Kurbo is a library for doing mathematics on bezier curves.
 use kurbo::{Affine, BezPath, Shape};
 use std::collections::BTreeMap;
@@ -63,27 +63,32 @@ fn set_total_advance(buffer: &mut GulzarBuffer) {
 // We want to know three things: the name of each glyph,
 // their paths, and the running total advance, so this routine
 // just gets that information ready in the buffer to help us
-// for later.
-fn prepare_buffer(buffer: &mut GulzarBuffer, font: &Font) {
-    let mut cache: BTreeMap<u32, Vec<BezPath>> = BTreeMap::new();
-    for mut item in buffer.glyphs.iter_mut() {
-        item.name = font.get_glyph_name(item.codepoint);
+// for later. The names and the paths are the same for every glyph
+// with the same glyph ID, so we get them once for each glyph ID,
+// and return them in a list that the glyphs refer to.
+fn prepare_buffer(buffer: &mut GulzarBuffer, font: &Font) -> Vec<GlyphShape> {
+    let mut shapes: Vec<GlyphShape> = vec![];
+    let mut seen: BTreeMap<u32, usize> = BTreeMap::new();
+    for item in buffer.glyphs.iter_mut() {
+        item.shape = *seen.entry(item.codepoint).or_insert_with(|| {
+            shapes.push(GlyphShape::new(
+                font.get_glyph_name(item.codepoint),
+                get_scaled_outline(font, item.codepoint),
+            ));
+            shapes.len() - 1
+        });
+        item.kinds = shapes[item.shape].kinds;
     }
-    for mut item in buffer.glyphs.iter_mut() {
-        item.paths = cache
-            .entry(item.codepoint)
-            .or_insert_with(|| get_scaled_outline(font, item.codepoint))
-            .clone(); // This clone is bad code, I know.
-    }
-    set_total_advance(buffer)
+    set_total_advance(buffer);
+    shapes
 }
 
 // The paths of a glyph of the buffer and where the glyph is, i.e.
 // including the full running-total x advance, for the kerning routine.
-fn placed(ix: usize, item: &glyph::GulzarGlyph) -> Placed<'_> {
+fn placed<'a>(ix: usize, item: &glyph::GulzarGlyph, shapes: &'a [GlyphShape]) -> Placed<'a> {
     Placed {
         key: ix,
-        paths: &item.paths,
+        paths: &shapes[item.shape].paths,
         dx: (item.x_total_advance + item.x_offset) as f64,
         dy: item.y_offset as f64,
     }
@@ -115,7 +120,7 @@ pub fn shape(
     // Get the Buffer from Harfbuzz and fill in the information
     // we need.
     let mut buffer = GulzarBuffer::from_ref(buf_ref);
-    prepare_buffer(&mut buffer, &font);
+    let shapes = prepare_buffer(&mut buffer, &font);
 
     // In this section we just mark all the glyphs which fall
     // above the tail of the bari ye.
@@ -140,7 +145,7 @@ pub fn shape(
             if item.is_init() && remainder > 0 {
                 debug(&format!(
                     "Adding {:} advance to {:} to fill bari-ye tail",
-                    remainder, item.name
+                    remainder, shapes[item.shape].name
                 ));
                 item.x_advance += (remainder as f32 / scale_factor) as i32;
                 remainder = 0;
@@ -194,8 +199,8 @@ pub fn shape(
 
         // Now we have a left glyph and a right glyph.
         if let Some(to_kern_with) = to_kern_with {
-            let mut left_glyphs = [placed(ix, this_item); 3];
-            let other_glyph = placed(to_kern_with, &buffer.glyphs[to_kern_with]);
+            let mut left_glyphs = [placed(ix, this_item, &shapes); 3];
+            let other_glyph = placed(to_kern_with, &buffer.glyphs[to_kern_with], &shapes);
             // We're actually going to extend those paths with
             // some more context on the left side,
             // to deal with things like بلی - the choti ye is part
@@ -216,7 +221,7 @@ pub fn shape(
                         continue;
                     }
                     counter += 1;
-                    left_glyphs[counter] = placed(next_ix, next);
+                    left_glyphs[counter] = placed(next_ix, next, &shapes);
                 } else {
                     break;
                 }
@@ -269,7 +274,7 @@ pub fn shape(
             last_bari_ye_ix = ix;
         } else if item.in_bari_ye  // it's in the bari ye (we computed this earlier)
             && item.is_dot_below() // and it's a dot which collides
-            && item.collides(&buffer.glyphs[last_bari_ye_ix], &font)
+            && item.collides(&buffer.glyphs[last_bari_ye_ix], &shapes, &font)
         {
             bari_ye_dots.push(ix); // keep a note of it.
         }
@@ -299,7 +304,7 @@ pub fn shape(
                     continue;
                 }
                 // If this dot doesn't collide with something, we're fine.
-                if !buffer.glyphs[i].collides(&buffer.glyphs[j], &font) {
+                if !buffer.glyphs[i].collides(&buffer.glyphs[j], &shapes, &font) {
                     continue;
                 }
                 // If this dot collided with an later dot, lower
@@ -340,7 +345,7 @@ pub fn shape(
                 if i == j {
                     continue;
                 }
-                if !buffer.glyphs[i].collides(&buffer.glyphs[j], &font) {
+                if !buffer.glyphs[i].collides(&buffer.glyphs[j], &shapes, &font) {
                     continue;
                 }
                 to_raise = Some(i);

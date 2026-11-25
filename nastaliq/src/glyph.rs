@@ -2,13 +2,65 @@ use harfbuzz_wasm::{Buffer, BufferItem, CGlyphInfo, CGlyphPosition, Font};
 use itertools::Itertools;
 use kurbo::{Affine, BezPath, PathEl, PathSeg, Rect};
 
+// The kinds of glyph we treat differently. A glyph can be of several kinds.
+pub const DOT_BELOW: u8 = 1 << 0;
+pub const DOT_ABOVE: u8 = 1 << 1;
+pub const BARI_YE: u8 = 1 << 2;
+pub const INIT: u8 = 1 << 3;
+pub const ISOL: u8 = 1 << 4;
+pub const FINA: u8 = 1 << 5;
+pub const SPACE: u8 = 1 << 6;
+
+// What we need to know about a glyph ID: its name, what kinds of glyph
+// that makes it, and its outline. Finding these out is expensive, and a
+// buffer has the same few glyph IDs over and over, so we do it once for
+// each glyph ID and let all the glyphs with that ID share the result.
+#[derive(Debug)]
+pub struct GlyphShape {
+    pub name: String,
+    pub kinds: u8,
+    pub paths: Vec<BezPath>,
+}
+
+impl GlyphShape {
+    // These rules will obviously need to be customized
+    // for each font, but maybe in a production Nastaliq shaper
+    // they would be driven from data in a font table.
+    pub fn new(name: String, paths: Vec<BezPath>) -> Self {
+        let mut kinds = 0;
+        if name.ends_with("BelowNS") || name.ends_with("HehCommaNS") {
+            kinds |= DOT_BELOW;
+        }
+        if name.ends_with("AboveNS") || name.ends_with("FathaNS") {
+            kinds |= DOT_ABOVE;
+        }
+        // The rest can be anywhere in the name. We look at each place in
+        // the name once, for all of them, rather than search the name
+        // five times: this is what name.contains("Ini") and so on say.
+        let bytes = name.as_bytes();
+        for at in 0..bytes.len() {
+            let rest = &bytes[at..];
+            match bytes[at] {
+                b'Y' if rest.starts_with(b"YehBarreeFin") => kinds |= BARI_YE,
+                b'I' if rest.starts_with(b"Ini") => kinds |= INIT,
+                b'S' if rest.starts_with(b"Sep") => kinds |= ISOL,
+                b'F' if rest.starts_with(b"Fin") => kinds |= FINA,
+                b's' if rest.starts_with(b"space") => kinds |= SPACE,
+                _ => {}
+            }
+        }
+        Self { name, kinds, paths }
+    }
+}
+
 // This is the standard glyph representation but with a few more
 // handy fields.
 #[derive(Debug)]
 pub struct GulzarGlyph {
     pub codepoint: u32,
-    pub name: String,
-    pub paths: Vec<BezPath>,
+    // Which GlyphShape this glyph has, and a copy of its kinds.
+    pub shape: usize,
+    pub kinds: u8,
     pub cluster: u32,
     pub x_advance: i32,
     pub x_total_advance: i32,
@@ -22,8 +74,8 @@ impl BufferItem for GulzarGlyph {
     fn from_c(info: CGlyphInfo, pos: CGlyphPosition) -> Self {
         Self {
             codepoint: info.codepoint,
-            name: "".to_string(),
-            paths: vec![],
+            shape: 0,
+            kinds: 0,
             cluster: info.cluster,
             x_advance: pos.x_advance,
             x_total_advance: 0,
@@ -53,35 +105,32 @@ impl BufferItem for GulzarGlyph {
 }
 
 impl GulzarGlyph {
-    // These routines will obviously need to be customized
-    // for each font, but maybe in a production Nastaliq shaper
-    // they would be driven from data in a font table.
     pub fn is_dot_below(&self) -> bool {
-        self.name.ends_with("BelowNS") || self.name.ends_with("HehCommaNS")
+        self.kinds & DOT_BELOW != 0
     }
 
     pub fn is_dot_above(&self) -> bool {
-        self.name.ends_with("AboveNS") || self.name.ends_with("FathaNS")
+        self.kinds & DOT_ABOVE != 0
     }
 
     pub fn is_bari_ye(&self) -> bool {
-        self.name.contains("YehBarreeFin")
+        self.kinds & BARI_YE != 0
     }
 
     pub fn is_init(&self) -> bool {
-        self.name.contains("Ini")
+        self.kinds & INIT != 0
     }
 
     pub fn is_isol(&self) -> bool {
-        self.name.contains("Sep")
+        self.kinds & ISOL != 0
     }
 
     pub fn is_fina(&self) -> bool {
-        self.name.contains("Fin")
+        self.kinds & FINA != 0
     }
 
     pub fn is_space(&self) -> bool {
-        self.name.contains("space")
+        self.kinds & SPACE != 0
     }
 
     // This is the bounding box of the *positioned* glyph,
@@ -97,8 +146,8 @@ impl GulzarGlyph {
 
     // Similarly, kurbo representations of a glyph's paths
     // positioned absolutely.
-    pub fn positioned_paths(&self) -> Vec<BezPath> {
-        let mut paths = self.paths.clone(); // urgh
+    pub fn positioned_paths(&self, shapes: &[GlyphShape]) -> Vec<BezPath> {
+        let mut paths = shapes[self.shape].paths.clone(); // urgh
         let affine = Affine::translate((
             (self.x_total_advance + self.x_offset) as f64,
             self.y_offset as f64,
@@ -110,7 +159,7 @@ impl GulzarGlyph {
     }
 
     // Terribly inefficient collision detector
-    pub fn collides(&self, other: &GulzarGlyph, font: &Font) -> bool {
+    pub fn collides(&self, other: &GulzarGlyph, shapes: &[GlyphShape], font: &Font) -> bool {
         // If the bounding boxes don't intersect, we can't collide.
         if self
             .bounding_box(font)
@@ -122,8 +171,8 @@ impl GulzarGlyph {
         }
         let (sx, _sy) = font.get_scale();
 
-        let my_paths = self.positioned_paths();
-        let their_paths = other.positioned_paths();
+        let my_paths = self.positioned_paths(shapes);
+        let their_paths = other.positioned_paths(shapes);
         // We could do line sweep or something here, but proof of concept...
         for p1 in my_paths {
             for p2 in &their_paths {

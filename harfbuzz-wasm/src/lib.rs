@@ -33,7 +33,7 @@ where
 }
 
 #[cfg(feature = "kurbo")]
-use kurbo::BezPath;
+use kurbo::{BezPath, PathEl};
 
 // We don't use #[wasm_bindgen] here because that makes
 // assumptions about Javascript calling conventions. We
@@ -50,8 +50,10 @@ extern "C" {
     fn font_get_glyph_h_advance(font: u32, glyph: u32) -> i32;
     fn font_get_glyph_v_advance(font: u32, glyph: u32) -> i32;
     fn font_copy_glyph_outline(font: u32, glyph: u32, outline: *mut CGlyphOutline) -> bool;
+    fn glyph_outline_free(outline: *mut CGlyphOutline);
     fn face_copy_table(font: u32, tag: u32, blob: *mut Blob) -> bool;
     fn buffer_copy_contents(buffer: u32, cbuffer: *mut CBufferContents) -> bool;
+    fn buffer_contents_free(cbuffer: *mut CBufferContents);
     fn buffer_set_contents(buffer: u32, cbuffer: &CBufferContents) -> bool;
     fn font_copy_coords(font: u32, coords: *mut CCoords) -> bool;
     fn font_set_coords(font: u32, coords: &CCoords) -> bool;
@@ -64,6 +66,19 @@ extern "C" {
         num_features: u32,
         shaper: *const u8,
     ) -> i32;
+}
+
+/// What the host put at `ptr`, as a slice.
+///
+/// The host leaves the pointer null when there is nothing to point
+/// at (a glyph without an outline, an empty buffer), and a slice must
+/// not be made from a null pointer, not even an empty one.
+unsafe fn host_slice<'a, T>(ptr: *const T, len: usize) -> &'a [T] {
+    if ptr.is_null() {
+        &[]
+    } else {
+        std::slice::from_raw_parts(ptr, len)
+    }
 }
 
 /// An opaque reference to a font at a given size and
@@ -171,47 +186,55 @@ impl Font {
         };
         let end_pts_of_contours: &[usize] = unsafe {
             font_copy_glyph_outline(self.0, glyph, &mut outline);
-            std::slice::from_raw_parts(outline.contours, outline.n_contours as usize)
+            host_slice(outline.contours, outline.n_contours as usize)
         };
         let points: &[CGlyphOutlinePoint] =
-            unsafe { std::slice::from_raw_parts(outline.points, outline.n_points as usize) };
-        let mut results: Vec<BezPath> = vec![];
+            unsafe { host_slice(outline.points, outline.n_points as usize) };
+        let mut results: Vec<BezPath> = Vec::with_capacity(end_pts_of_contours.len());
         let mut start_pt: usize = 0;
         for end_pt in end_pts_of_contours {
             let this_contour = &points[start_pt..*end_pt];
             start_pt = *end_pt;
-            let mut path = BezPath::new();
+            // A path element takes one point or more, and there is
+            // one more element to close the path: this is room enough.
+            let mut path: Vec<PathEl> = Vec::with_capacity(this_contour.len() + 1);
             let mut ix = 0;
             while ix < this_contour.len() {
                 let point = &this_contour[ix];
                 match point.pointtype {
-                    PointType::MoveTo => path.move_to((point.x as f64, point.y as f64)),
-                    PointType::LineTo => path.line_to((point.x as f64, point.y as f64)),
+                    PointType::MoveTo => {
+                        path.push(PathEl::MoveTo((point.x as f64, point.y as f64).into()))
+                    }
+                    PointType::LineTo => {
+                        path.push(PathEl::LineTo((point.x as f64, point.y as f64).into()))
+                    }
                     PointType::QuadraticTo => {
                         ix += 1;
                         let end_pt = &this_contour[ix];
-                        path.quad_to(
-                            (point.x as f64, point.y as f64),
-                            (end_pt.x as f64, end_pt.y as f64),
-                        );
+                        path.push(PathEl::QuadTo(
+                            (point.x as f64, point.y as f64).into(),
+                            (end_pt.x as f64, end_pt.y as f64).into(),
+                        ));
                     }
                     PointType::CubicTo => {
                         ix += 1;
                         let mid_pt = &this_contour[ix];
                         ix += 1;
                         let end_pt = &this_contour[ix];
-                        path.curve_to(
-                            (point.x as f64, point.y as f64),
-                            (mid_pt.x as f64, mid_pt.y as f64),
-                            (end_pt.x as f64, end_pt.y as f64),
-                        );
+                        path.push(PathEl::CurveTo(
+                            (point.x as f64, point.y as f64).into(),
+                            (mid_pt.x as f64, mid_pt.y as f64).into(),
+                            (end_pt.x as f64, end_pt.y as f64).into(),
+                        ));
                     }
                 }
                 ix += 1;
             }
-            path.close_path();
-            results.push(path);
+            path.push(PathEl::ClosePath);
+            results.push(BezPath::from_vec(path));
         }
+        // The host allocated the points and contours in this instance.
+        unsafe { glyph_outline_free(&mut outline) };
         results
     }
 
@@ -224,9 +247,7 @@ impl Font {
         if !unsafe { font_copy_coords(self.0, &mut container) } {
             panic!("Couldn't copy variation coordinates")
         }
-        let coords =
-            unsafe { std::slice::from_raw_parts(container.coords, container.count as usize) }
-                .to_vec();
+        let coords = unsafe { host_slice(container.coords, container.count as usize) }.to_vec();
         debug(&format!("Container coords: {:?}", coords));
         return coords.iter().map(|i| *i as f32 / 16384.0).collect();
     }
@@ -317,12 +338,12 @@ impl<T: BufferItem> Buffer<T> {
         unsafe {
             buffer_copy_contents(ptr, &mut c_contents) || panic!("Couldn't copy buffer contents")
         };
-        let positions: Vec<CGlyphPosition> = unsafe {
-            std::slice::from_raw_parts(c_contents.position, c_contents.length as usize).to_vec()
-        };
-        let infos: Vec<CGlyphInfo> = unsafe {
-            std::slice::from_raw_parts(c_contents.info, c_contents.length as usize).to_vec()
-        };
+        let positions: Vec<CGlyphPosition> =
+            unsafe { host_slice(c_contents.position, c_contents.length as usize).to_vec() };
+        let infos: Vec<CGlyphInfo> =
+            unsafe { host_slice(c_contents.info, c_contents.length as usize).to_vec() };
+        // The host allocated the two arrays in this instance.
+        unsafe { buffer_contents_free(&mut c_contents) };
         Buffer {
             glyphs: infos
                 .into_iter()

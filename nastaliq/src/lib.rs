@@ -1,17 +1,18 @@
+mod allocator;
 mod dist;
+mod dist_slow;
 mod glyph;
+mod mindist;
+mod outline;
 
 // Auto-kerning routine, look in dist.rs for this.
-use dist::determine_kern;
+use dist::{Kerner, Placed};
 // Routines for interfacing with Harfbuzz
-use harfbuzz_wasm::{debug, Font};
+use harfbuzz_wasm::Font;
 // With the Harfbuzz interface, we can choose how we want
 // to represent a glyph. Here we use our own custom glyph
 // representation so we can do clever things with it.
-use glyph::GulzarBuffer;
-// Kurbo is a library for doing mathematics on bezier curves.
-use kurbo::{Affine, BezPath, Shape};
-use std::collections::BTreeMap;
+use glyph::{Collider, GlyphShape, GulzarBuffer};
 
 use wasm_bindgen::prelude::*;
 
@@ -20,31 +21,6 @@ use wasm_bindgen::prelude::*;
 const KERN_DISTANCE: f32 = 300.0;
 const BARI_YE_DOT_POSITION: f32 = -150.0;
 const DOT_AVOIDANCE_DELTA: f32 = 50.0; // How much to move a colliding dot. Affects rendering speed.
-
-// Return a slightly scaled-up copy of a glyph's outline.
-// We create this slightly bigger copy of the glyphs so that
-// when we do collision tests between glyphs, they have a bit
-// of breathing space around them.
-fn get_scaled_outline(font: &Font, glyph: u32) -> Vec<BezPath> {
-    let mut paths = font.get_outline(glyph);
-    // Find a bounding box which encompasses all the paths by
-    // taking the union of all of their bounding boxes.
-    if let Some(big_bounds) = paths
-        .iter()
-        .map(|x| x.bounding_box())
-        .reduce(|a, b| a.union(b))
-    {
-        // Scale up 10% around the center.
-        let center_vec = big_bounds.center().to_vec2();
-        let affine = Affine::translate(center_vec * -1.0)
-            * Affine::scale(1.12)
-            * Affine::translate(center_vec);
-        for path in paths.iter_mut() {
-            path.apply_affine(affine);
-        }
-    }
-    paths
-}
 
 // Normally Harfbuzz buffers give you the advance for each glyph
 // but it turns out to be quite useful for us to keep a running
@@ -62,19 +38,58 @@ fn set_total_advance(buffer: &mut GulzarBuffer) {
 // We want to know three things: the name of each glyph,
 // their paths, and the running total advance, so this routine
 // just gets that information ready in the buffer to help us
-// for later.
-fn prepare_buffer(buffer: &mut GulzarBuffer, font: &Font) {
-    let mut cache: BTreeMap<u32, Vec<BezPath>> = BTreeMap::new();
-    for mut item in buffer.glyphs.iter_mut() {
-        item.name = font.get_glyph_name(item.codepoint);
+// for later. The names and the paths are the same for every glyph
+// with the same glyph ID, so we keep them once for each glyph ID,
+// in a list of shapes that the glyphs refer to. (A shape gets the
+// name here, and the paths when they are first wanted: look in
+// glyph.rs and outline.rs.)
+fn prepare_buffer(buffer: &mut GulzarBuffer, font: &Font) -> Vec<GlyphShape> {
+    let mut shapes: Vec<GlyphShape> = vec![];
+    // We look every glyph of the buffer up by its glyph ID, so the
+    // looking up had better be quick: a little hash table of the glyph
+    // IDs we have seen. A slot has a glyph ID and the number of its
+    // shape, counting from one, with zero for a slot nobody has. There
+    // are at least twice as many slots as glyphs, and their number is
+    // a power of two.
+    let mut seen: Vec<(u32, usize)> = vec![(0, 0); (buffer.glyphs.len() * 2).next_power_of_two()];
+    for item in buffer.glyphs.iter_mut() {
+        let mut slot = ((item.codepoint as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 32) as usize;
+        item.shape = loop {
+            slot &= seen.len() - 1;
+            if seen[slot].1 == 0 {
+                shapes.push(GlyphShape::new(
+                    item.codepoint,
+                    &font.get_glyph_name(item.codepoint),
+                ));
+                seen[slot] = (item.codepoint, shapes.len());
+            }
+            if seen[slot].0 == item.codepoint {
+                break seen[slot].1 - 1;
+            }
+            slot += 1;
+        };
+        item.kinds = shapes[item.shape].kinds;
     }
-    for mut item in buffer.glyphs.iter_mut() {
-        item.paths = cache
-            .entry(item.codepoint)
-            .or_insert_with(|| get_scaled_outline(font, item.codepoint))
-            .clone(); // This clone is bad code, I know.
+    set_total_advance(buffer);
+    shapes
+}
+
+// The paths of a glyph of the buffer and where the glyph is, i.e.
+// including the full running-total x advance, for the kerning routine.
+fn placed<'a>(
+    ix: usize,
+    item: &glyph::GulzarGlyph,
+    shapes: &'a [GlyphShape],
+    font: &Font,
+) -> Placed<'a> {
+    let outline = shapes[item.shape].outline(font);
+    Placed {
+        key: ix,
+        paths: &outline.paths,
+        finite: outline.finite,
+        dx: (item.x_total_advance + item.x_offset) as f64,
+        dy: item.y_offset as f64,
     }
-    set_total_advance(buffer)
 }
 
 #[wasm_bindgen]
@@ -103,7 +118,7 @@ pub fn shape(
     // Get the Buffer from Harfbuzz and fill in the information
     // we need.
     let mut buffer = GulzarBuffer::from_ref(buf_ref);
-    prepare_buffer(&mut buffer, &font);
+    let shapes = prepare_buffer(&mut buffer, &font);
 
     // In this section we just mark all the glyphs which fall
     // above the tail of the bari ye.
@@ -113,8 +128,7 @@ pub fn shape(
             // tail was in units. We're going to then count off
             // each glyph's advance width so we know whether
             // of units we have left within the span of this glyph.
-            let bari_ye_tail: i32 =
-                font.get_glyph_extents(item.codepoint).width - item.x_advance - 20;
+            let bari_ye_tail: i32 = shapes[item.shape].extents(&font).width - item.x_advance - 20;
             bari_ye_counter = Some(bari_ye_tail);
             // and now we start marking glyphs as being above the
             // bari ye.
@@ -126,10 +140,6 @@ pub fn shape(
             // the init glyph so that we clear the tail. (Otherwise
             // in ابے the alif clashes with the bari ye.)
             if item.is_init() && remainder > 0 {
-                debug(&format!(
-                    "Adding {:} advance to {:} to fill bari-ye tail",
-                    remainder, item.name
-                ));
                 item.x_advance += (remainder as f32 / scale_factor) as i32;
                 remainder = 0;
             } else {
@@ -152,6 +162,7 @@ pub fn shape(
 
     let buffer_len = buffer.glyphs.len();
     let mut kerns = vec![];
+    let mut kerner = Kerner::new();
 
     for ix in 0..buffer_len {
         let this_item = &buffer.glyphs[ix];
@@ -181,8 +192,8 @@ pub fn shape(
 
         // Now we have a left glyph and a right glyph.
         if let Some(to_kern_with) = to_kern_with {
-            let mut left_paths = this_item.positioned_paths();
-            let other_paths = &buffer.glyphs[to_kern_with].positioned_paths();
+            let mut left_glyphs = [placed(ix, this_item, &shapes, &font); 3];
+            let other_glyph = placed(to_kern_with, &buffer.glyphs[to_kern_with], &shapes, &font);
             // We're actually going to extend those paths with
             // some more context on the left side,
             // to deal with things like بلی - the choti ye is part
@@ -195,27 +206,31 @@ pub fn shape(
                     break;
                 }
                 if let Some(next) = buffer.glyphs.get(ix3) {
+                    let next_ix = ix3;
                     ix3 -= 1;
                     // Ignore dots for the purposes of kerning.
                     // We deal with them later.
                     if next.is_dot_below() || next.is_dot_above() {
                         continue;
                     }
-                    left_paths.extend_from_slice(&next.positioned_paths());
                     counter += 1;
+                    left_glyphs[counter] = placed(next_ix, next, &shapes, &font);
                 } else {
                     break;
                 }
             }
-            if left_paths.is_empty() || other_paths.is_empty() {
+            let left_glyphs = &left_glyphs[..=counter];
+            if left_glyphs.iter().all(|glyph| glyph.paths.is_empty())
+                || other_glyph.paths.is_empty()
+            {
                 continue;
             }
 
             // OK, we found everything we want. Work out the
             // kern. If we saw a space, loosen things a little.
-            let kern_required = determine_kern(
-                &left_paths,
-                other_paths,
+            let kern_required = kerner.determine_kern(
+                left_glyphs,
+                &other_glyph,
                 KERN_DISTANCE * scale_factor,
                 0.0,
                 scale_factor,
@@ -243,6 +258,9 @@ pub fn shape(
     // We changed the advances so we should recompute.
     set_total_advance(&mut buffer);
 
+    // From here on we look for glyphs that collide.
+    let mut collider = Collider::new(&buffer.glyphs, &shapes, &font, x_scale);
+
     // Drop dots within bari ye.
     let mut last_bari_ye_ix = 0;
     let mut bari_ye_dots = vec![];
@@ -252,7 +270,7 @@ pub fn shape(
             last_bari_ye_ix = ix;
         } else if item.in_bari_ye  // it's in the bari ye (we computed this earlier)
             && item.is_dot_below() // and it's a dot which collides
-            && item.collides(&buffer.glyphs[last_bari_ye_ix], &font)
+            && collider.collides(&buffer.glyphs, ix, last_bari_ye_ix)
         {
             bari_ye_dots.push(ix); // keep a note of it.
         }
@@ -262,15 +280,20 @@ pub fn shape(
     // set its absolute Y offset. You can't do *that* in OpenType!
     for ix in bari_ye_dots {
         let mut item = &mut buffer.glyphs[ix];
-        let extents = font.get_glyph_extents(item.codepoint);
+        let extents = shapes[item.shape].extents(&font);
         item.y_offset = extents.height - (BARI_YE_DOT_POSITION * scale_factor) as i32;
+        collider.moved(ix, item);
     }
 
     // Let's do dot avoidance. Part one, dots below.
+    // Each time we move a dot we have to check again, but not the
+    // whole buffer: the dots from `checked` on were fine the last time
+    // we looked, and nothing near them has moved since.
+    let mut checked = buffer_len;
     loop {
         let mut to_lower: Option<usize> = None;
         // Walk backwards along the buffer, finding dots below
-        for i in (0..buffer_len).rev() {
+        for i in (0..checked).rev() {
             if !buffer.glyphs[i].is_dot_below() {
                 continue;
             }
@@ -282,7 +305,7 @@ pub fn shape(
                     continue;
                 }
                 // If this dot doesn't collide with something, we're fine.
-                if !buffer.glyphs[i].collides(&buffer.glyphs[j], &font) {
+                if !collider.collides(&buffer.glyphs, i, j) {
                     continue;
                 }
                 // If this dot collided with an later dot, lower
@@ -309,13 +332,19 @@ pub fn shape(
         // Otherwise, fix this dot and go check again.
         let to_lower = to_lower.unwrap();
         buffer.glyphs[to_lower].y_offset -= (DOT_AVOIDANCE_DELTA * scale_factor) as i32;
+        collider.moved(to_lower, &buffer.glyphs[to_lower]);
+        // A dot looks at the eight glyphs before it, so the dots which
+        // could now collide with the one we moved are the eight after
+        // it at most. Those after that are still fine.
+        checked = (to_lower + 9).min(buffer_len);
     }
 
     // And this is basically the same thing but looking at
     // dots above.
+    let mut checked = buffer_len;
     loop {
         let mut to_raise: Option<usize> = None;
-        for i in (0..buffer_len).rev() {
+        for i in (0..checked).rev() {
             if !buffer.glyphs[i].is_dot_above() {
                 continue;
             }
@@ -323,10 +352,11 @@ pub fn shape(
                 if i == j {
                     continue;
                 }
-                if !buffer.glyphs[i].collides(&buffer.glyphs[j], &font) {
+                if !collider.collides(&buffer.glyphs, i, j) {
                     continue;
                 }
                 to_raise = Some(i);
+                break;
             }
             if to_raise.is_some() {
                 break;
@@ -337,6 +367,9 @@ pub fn shape(
         }
         let to_raise = to_raise.unwrap();
         buffer.glyphs[to_raise].y_offset += (50.0 * scale_factor) as i32;
+        collider.moved(to_raise, &buffer.glyphs[to_raise]);
+        // Here a dot looks at the six glyphs before it.
+        checked = (to_raise + 7).min(buffer_len);
     }
 
     // And we are done. Hand the buffer back to harfbuzz.

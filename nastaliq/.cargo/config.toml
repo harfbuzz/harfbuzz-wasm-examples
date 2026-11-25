@@ -1,0 +1,15 @@
+# HarfBuzz runs the module in wasm-micro-runtime's fast interpreter, which
+# runs a local.tee as an instruction of its own, while a local.set followed
+# by a local.get costs nothing.  wasm-ld-untee links with rust-lld, as cargo
+# does by itself, and then rewrites every local.tee as those two; see the top
+# of that file.  (It is a Python script, like ../bin/otfsurgeon.)
+#
+# LLVM turns a branch around an assignment into a select, which a
+# processor runs without a jump.  In the interpreter the select is one
+# instruction, storing its result is another, and both values were worked
+# out first; the branch is one instruction and skips the rest.  Keep the
+# branch.  (Cargo takes the flags from the RUSTFLAGS environment variable
+# instead of from here when that is set.)
+[target.wasm32-unknown-unknown]
+linker = "./wasm-ld-untee"
+rustflags = ["-C", "llvm-args=-two-entry-phi-node-folding-threshold=0"]

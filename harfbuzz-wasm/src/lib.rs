@@ -68,6 +68,19 @@ extern "C" {
     ) -> i32;
 }
 
+/// What the host put at `ptr`, as a slice.
+///
+/// The host leaves the pointer null when there is nothing to point
+/// at (a glyph without an outline, an empty buffer), and a slice must
+/// not be made from a null pointer, not even an empty one.
+unsafe fn host_slice<'a, T>(ptr: *const T, len: usize) -> &'a [T] {
+    if ptr.is_null() {
+        &[]
+    } else {
+        std::slice::from_raw_parts(ptr, len)
+    }
+}
+
 /// An opaque reference to a font at a given size and
 /// variation. It is equivalent to the `hb_font_t` pointer
 /// in Harfbuzz.
@@ -173,10 +186,10 @@ impl Font {
         };
         let end_pts_of_contours: &[usize] = unsafe {
             font_copy_glyph_outline(self.0, glyph, &mut outline);
-            std::slice::from_raw_parts(outline.contours, outline.n_contours as usize)
+            host_slice(outline.contours, outline.n_contours as usize)
         };
         let points: &[CGlyphOutlinePoint] =
-            unsafe { std::slice::from_raw_parts(outline.points, outline.n_points as usize) };
+            unsafe { host_slice(outline.points, outline.n_points as usize) };
         let mut results: Vec<BezPath> = vec![];
         let mut start_pt: usize = 0;
         for end_pt in end_pts_of_contours {
@@ -228,9 +241,7 @@ impl Font {
         if !unsafe { font_copy_coords(self.0, &mut container) } {
             panic!("Couldn't copy variation coordinates")
         }
-        let coords =
-            unsafe { std::slice::from_raw_parts(container.coords, container.count as usize) }
-                .to_vec();
+        let coords = unsafe { host_slice(container.coords, container.count as usize) }.to_vec();
         debug(&format!("Container coords: {:?}", coords));
         return coords.iter().map(|i| *i as f32 / 16384.0).collect();
     }
@@ -321,12 +332,10 @@ impl<T: BufferItem> Buffer<T> {
         unsafe {
             buffer_copy_contents(ptr, &mut c_contents) || panic!("Couldn't copy buffer contents")
         };
-        let positions: Vec<CGlyphPosition> = unsafe {
-            std::slice::from_raw_parts(c_contents.position, c_contents.length as usize).to_vec()
-        };
-        let infos: Vec<CGlyphInfo> = unsafe {
-            std::slice::from_raw_parts(c_contents.info, c_contents.length as usize).to_vec()
-        };
+        let positions: Vec<CGlyphPosition> =
+            unsafe { host_slice(c_contents.position, c_contents.length as usize).to_vec() };
+        let infos: Vec<CGlyphInfo> =
+            unsafe { host_slice(c_contents.info, c_contents.length as usize).to_vec() };
         // The host allocated the two arrays in this instance.
         unsafe { buffer_contents_free(&mut c_contents) };
         Buffer {

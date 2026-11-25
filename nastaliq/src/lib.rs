@@ -1,3 +1,4 @@
+mod allocator;
 mod dist;
 mod glyph;
 mod mindist;

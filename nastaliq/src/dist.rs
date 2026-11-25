@@ -508,14 +508,18 @@ fn path_distance(
         ) else {
             continue;
         };
+        // The square of the smallest distance measured so far, and a
+        // bit: what is at least that far apart cannot be nearer.
+        let mut limit = f64::INFINITY;
         if let Some(min) = min_distance {
+            limit = min * min * (1.0 + 1e-9);
             // This pair is farther apart than one we have measured, or
             // it is that one.
-            if farther(pair.apart, min) || k == nearest {
+            if pair.apart > limit || k == nearest {
                 continue;
             }
         }
-        let d = min_distance_bezpath(left, p1, right, p2, &mut pair.closest, near);
+        let d = min_distance_bezpath(left, p1, right, p2, &mut pair.closest, near, limit);
         // log::debug!("  d={:?}", d);
         if d.is_nan() {
             // Two curves that touch can measure as "not a number".
@@ -566,13 +570,6 @@ fn rounding(largest: f64) -> f64 {
     ROUNDING * largest * largest
 }
 
-// Whether paths that are at least the square root of `apart` apart are
-// farther apart than `distance`.
-#[inline(always)]
-fn farther(apart: f64, distance: f64) -> bool {
-    apart > distance * distance * (1.0 + 1e-9)
-}
-
 // Work out which are the closest pair of segments, and how far apart
 // those two are. `hint` is the pair it was the last time, if these paths
 // have been compared before, and becomes the pair it is now.
@@ -583,6 +580,7 @@ fn min_distance_bezpath(
     path2: &Path,
     hint: &mut Option<(usize, usize)>,
     near: &mut Vec<(PointBox, usize)>,
+    limit: f64,
 ) -> f64 {
     *hint = closest_segments(one, path1, other, path2, *hint, near);
     if let Some((i1, i2)) = *hint {
@@ -590,8 +588,8 @@ fn min_distance_bezpath(
         // debug(&format!("Best pair was {:?}, {:?}", s1, s2));
         match (s1, s2) {
             (PathSeg::Line(l1), PathSeg::Line(l2)) => line_line_dist(l1, l2),
-            (PathSeg::Line(l1), PathSeg::Quad(c2)) => line_curve_dist(l1, c2),
-            (PathSeg::Quad(c1), PathSeg::Line(l2)) => line_curve_dist(l2, c1),
+            (PathSeg::Line(l1), PathSeg::Quad(c2)) => line_curve_dist(l1, c2, limit),
+            (PathSeg::Quad(c1), PathSeg::Line(l2)) => line_curve_dist(l2, c1, limit),
             // What s1.min_dist(s2, 0.5).distance is.
             (PathSeg::Quad(c1), PathSeg::Quad(c2)) => quad_quad_dist(&c1, &c2),
             _ => {
@@ -821,7 +819,11 @@ fn line_line_dist(l1: kurbo::Line, l2: kurbo::Line) -> f64 {
 // 2^-44 M^2 for a largest coordinate M, and we allow 2^-36 M^2 as
 // at_least_apart() does. The points are tried nearest first, going by
 // that.
-fn line_curve_dist(l1: kurbo::Line, c1: kurbo::QuadBez) -> f64 {
+//
+// Nor is it done for a point that is farther from the curve than
+// `limit`, the square of a distance that the caller has no use for
+// anything above: the result is then just some distance above it.
+fn line_curve_dist(l1: kurbo::Line, c1: kurbo::QuadBez, limit: f64) -> f64 {
     let t = [0.0, 0.2, 0.4, 0.6, 0.8, 0.99];
     let points = t.map(|x| l1.eval(x));
     let mut largest = 0.0;
@@ -857,6 +859,9 @@ fn line_curve_dist(l1: kurbo::Line, c1: kurbo::QuadBez) -> f64 {
             f64::NEG_INFINITY
         }
     });
+    // What a point must not be farther than to matter: the limit, or
+    // the nearest distance found so far and a bit.
+    let mut reach = limit;
     let mut nearest: Option<f64> = None;
     for _ in &points {
         // The nearest of the points that have not been tried: those
@@ -867,14 +872,15 @@ fn line_curve_dist(l1: kurbo::Line, c1: kurbo::QuadBez) -> f64 {
                 next = i;
             }
         }
-        if let Some(nearest) = nearest {
-            // The points that are left are all farther than this.
-            if apart[next] > nearest * (1.0 + 1e-9) {
-                break;
-            }
+        // The points that are left are all farther than this.
+        if apart[next] > reach {
+            break;
         }
         let distance_sq = c1.nearest(points[next], 1.0).distance_sq;
         nearest = Some(nearest.map_or(distance_sq, |nearest| nearest.min(distance_sq)));
+        if distance_sq * (1.0 + 1e-9) < reach {
+            reach = distance_sq * (1.0 + 1e-9);
+        }
         apart[next] = f64::INFINITY;
     }
     nearest.unwrap_or(f64::MAX).sqrt()

@@ -1,14 +1,28 @@
 use harfbuzz_wasm::Font;
 use kurbo::{Affine, BezPath, ParamCurve, PathEl, Point, QuadBez, Rect, Shape};
 
+// A glyph's outline, and whether all its coordinates are finite
+// numbers. They need not be: they come from the host as 32-bit floats,
+// and a font can be slanted so far that those overflow. The kerning
+// has a quick way for the finite ones, see dist.rs.
+#[derive(Debug)]
+pub struct Outline {
+    pub paths: Vec<BezPath>,
+    pub finite: bool,
+}
+
 // Return a slightly scaled-up copy of a glyph's outline.
 // We create this slightly bigger copy of the glyphs so that
 // when we do collision tests between glyphs, they have a bit
 // of breathing space around them.
-pub fn get_scaled_outline(font: &Font, glyph: u32) -> Vec<BezPath> {
+pub fn get_scaled_outline(font: &Font, glyph: u32) -> Outline {
     let mut paths = font.get_outline(glyph);
+    let mut finite = false;
     // Find a bounding box which encompasses all the paths.
     if let Some((big_bounds, ordinary)) = bounding_box(&paths) {
+        // Ordinary coordinates are finite, and scaling them by 1.12
+        // around a point between them leaves them finite.
+        finite = ordinary;
         // Scale up 10% around the center.
         let center_vec = big_bounds.center().to_vec2();
         let affine = Affine::translate(center_vec * -1.0)
@@ -34,7 +48,23 @@ pub fn get_scaled_outline(font: &Font, glyph: u32) -> Vec<BezPath> {
             }
         }
     }
+    // Where we did not look at the coordinates ourselves, look now.
+    let finite = finite || all_finite(&paths);
+    Outline { paths, finite }
+}
+
+// Is every coordinate of the paths a finite number?
+fn all_finite(paths: &[BezPath]) -> bool {
+    let finite = |p: &Point| p.x.is_finite() && p.y.is_finite();
     paths
+        .iter()
+        .flat_map(|path| path.elements())
+        .all(|el| match el {
+            PathEl::MoveTo(p) | PathEl::LineTo(p) => finite(p),
+            PathEl::QuadTo(p1, p2) => finite(p1) && finite(p2),
+            PathEl::CurveTo(p1, p2, p3) => finite(p1) && finite(p2) && finite(p3),
+            PathEl::ClosePath => true,
+        })
 }
 
 // This is path.apply_affine(affine) too, for a transform that scales

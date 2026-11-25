@@ -1,4 +1,4 @@
-use crate::outline::{get_scaled_outline, include, NOTHING};
+use crate::outline::{get_scaled_outline, include, Outline, NOTHING};
 use harfbuzz_wasm::{Buffer, BufferItem, CGlyphExtents, CGlyphInfo, CGlyphPosition, Font};
 use kurbo::{flatten, Affine, BezPath, PathEl, Point, Rect};
 use std::cell::OnceCell;
@@ -22,7 +22,7 @@ pub struct GlyphShape {
     // Not every glyph gets asked for its outline or its extents,
     // so we only get them from the host the first time somebody does.
     glyph: u32,
-    outline: OnceCell<Vec<BezPath>>,
+    outline: OnceCell<Outline>,
     extents: OnceCell<CGlyphExtents>,
     // The same goes for the outline as collision tests want it.
     corners: OnceCell<Option<Corners>>,
@@ -65,7 +65,7 @@ impl GlyphShape {
     }
 
     // The glyph's outline, scaled up a little.
-    pub fn outline(&self, font: &Font) -> &Vec<BezPath> {
+    pub fn outline(&self, font: &Font) -> &Outline {
         self.outline
             .get_or_init(|| get_scaled_outline(font, self.glyph))
     }
@@ -413,7 +413,7 @@ impl GlyphShape {
     // The corners of the outline, if the collision tests can use them.
     fn corners(&self, font: &Font, tolerance: f64) -> Option<&Corners> {
         self.corners
-            .get_or_init(|| Corners::of(self.outline(font), tolerance))
+            .get_or_init(|| Corners::of(&self.outline(font).paths, tolerance))
             .as_ref()
     }
 }
@@ -612,8 +612,8 @@ impl<'a> Collider<'a> {
             );
         } else {
             // Flatten them the long way, all of them.
-            let my_paths = self.shapes[me.shape].outline(self.font);
-            let their_paths = self.shapes[them.shape].outline(self.font);
+            let my_paths = &self.shapes[me.shape].outline(self.font).paths;
+            let their_paths = &self.shapes[them.shape].outline(self.font).paths;
             Self::flatten(
                 my_paths,
                 my_place,

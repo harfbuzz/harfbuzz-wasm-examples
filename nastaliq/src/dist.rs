@@ -1,3 +1,4 @@
+use crate::dist_slow;
 use crate::mindist::quad_quad_dist;
 use core::ops::Range;
 use harfbuzz_wasm::debug;
@@ -13,10 +14,12 @@ use kurbo::{BezPath, CubicBez, Line, ParamCurve, ParamCurveNearest, PathEl, Path
 // The paths of a glyph, and how far the glyph is moved from where its
 // paths are. `key` says which glyph this is: a Kerner takes two of
 // these with the same key to be the same glyph in the same place.
+// `finite` says that every coordinate of the paths is a finite number.
 #[derive(Clone, Copy)]
 pub struct Placed<'a> {
     pub key: usize,
     pub paths: &'a [BezPath],
+    pub finite: bool,
     pub dx: f64,
     pub dy: f64,
 }
@@ -61,6 +64,18 @@ impl Kerner {
         max_tuck: f32,
         scale_factor: f32,
     ) -> f32 {
+        // What follows gives the kern that the slow way gives, with
+        // less work, but only for coordinates that are finite: what
+        // it leaves out is argued for numbers that compare the way
+        // numbers do. (Finite is enough. The coordinates start as
+        // 32-bit floats, glyphs are moved by whole numbers and the
+        // right paths by 32-bit floats, so nothing here is big enough
+        // for a sum of squares to overflow.) An outline with an
+        // infinity or a NaN in it goes the slow way.
+        if !(left.iter().all(|glyph| glyph.finite) && right.finite) {
+            return dist_slow::determine_kern(left, right, target_distance, max_tuck, scale_factor);
+        }
+
         // The left paths stay where they are, so take their segments, and
         // the points we compare segments by, once. We're going to slide
         // the right paths around until they fit.

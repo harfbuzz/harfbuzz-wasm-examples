@@ -1,5 +1,6 @@
 mod allocator;
 mod dist;
+mod dist_slow;
 mod glyph;
 mod mindist;
 mod outline;
@@ -81,9 +82,11 @@ fn placed<'a>(
     shapes: &'a [GlyphShape],
     font: &Font,
 ) -> Placed<'a> {
+    let outline = shapes[item.shape].outline(font);
     Placed {
         key: ix,
-        paths: shapes[item.shape].outline(font),
+        paths: &outline.paths,
+        finite: outline.finite,
         dx: (item.x_total_advance + item.x_offset) as f64,
         dy: item.y_offset as f64,
     }

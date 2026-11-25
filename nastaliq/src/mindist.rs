@@ -24,8 +24,9 @@
 // on is the one kurbo does, on the same operands, in the same order,
 // so the result has the same bits. Three facts are used to leave
 // operations out. They hold as long as no intermediate value
-// overflows, which cannot happen here: outline coordinates start as
-// 32-bit floats.
+// overflows or is not a number to begin with, which cannot happen
+// here: dist.rs only comes here with finite coordinates, and those
+// start as 32-bit floats.
 //
 // - x * 1.0 and x + 0.0 are x. (But for the sign of a zero, which can
 //   end up in a coefficient. It changes no comparison, and it does not

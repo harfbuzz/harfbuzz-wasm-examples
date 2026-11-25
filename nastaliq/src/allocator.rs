@@ -2,7 +2,7 @@
 //
 // HarfBuzz runs the module in an interpreter and limits the instructions
 // a shape() call may run.  The standard library's allocator for this
-// target (dlmalloc) costs about 230 of them for each allocation and its
+// target (dlmalloc) costs about 140 of them for each allocation and its
 // release.  Here blocks of up to 64 KiB are kept in free lists by size,
 // which costs about 20.  The lists are cut from chunks that come from
 // the standard allocator, and bigger blocks go to it directly.
@@ -12,8 +12,8 @@
 // allocator keeps its free memory: nothing is given back, and nothing is
 // forgotten between calls.  A released block only serves requests of its
 // own size again, and a size is rounded up to a power of two, so the
-// module can hold more memory than before: 35 MiB instead of 26 MiB after
-// shaping 12,748 characters at once, the most that was seen.
+// module can hold more memory than before: 6.94 MiB instead of 5.50 MiB
+// after shaping 12,748 characters at once.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::UnsafeCell;

@@ -704,11 +704,7 @@ fn closest_segments(
     let points2 = &other.points[path2.segs.clone()];
     let boxes1 = &one.boxes[path1.boxes.clone()];
     let boxes2 = &other.boxes[path2.boxes.clone()];
-    let mut closest = Closest {
-        distance: f64::INFINITY,
-        limit: f64::INFINITY,
-        pair: None,
-    };
+    let mut closest = Closest::new();
 
     // Something to start with: the closest pair of the last round, or
     // else the segments in the box of the first path that is nearest
@@ -796,15 +792,30 @@ fn positive(a: f64, b: f64) -> f64 {
 
 // The closest pair of segments found so far.
 struct Closest {
-    // How far apart the pair is.
-    distance: f64,
-    // Its square and a bit: two points whose squared distance is more
-    // than this are farther apart than `distance`.
-    limit: f64,
     pair: Option<(usize, usize)>,
+    // For each of the pair's three pairs of points, the differences in x
+    // and in y between the two points and the sum of their squares.
+    between: [(f64, f64, f64); 3],
+    // The least of the three sums of squares.
+    square: f64,
+    // That and a bit: two points whose squared distance is more than
+    // this are farther apart than the pair is.
+    limit: f64,
+    // How far apart the pair is, if that has had to be worked out.
+    distance: Option<f64>,
 }
 
 impl Closest {
+    fn new() -> Self {
+        Closest {
+            pair: None,
+            between: [(0.0, 0.0, 0.0); 3],
+            square: f64::INFINITY,
+            limit: f64::INFINITY,
+            distance: None,
+        }
+    }
+
     // Look at one pair of segments.
     #[inline(always)]
     fn offer(&mut self, i1: usize, p1: &[Point; 3], i2: usize, p2: &[Point; 3]) {
@@ -821,43 +832,50 @@ impl Closest {
         self.take(i1, i2, [(x0, y0, square0), (x1, y1, square1), (x2, y2, square2)]);
     }
 
-    // The pair of segments has points that are not over the limit:
-    // see how far apart it is, and whether it is the closest now. Each
-    // of `between` is the differences in x and y between two points and
-    // the sum of their squares.
+    // The pair of segments has points that are not over the limit: see
+    // whether it is the closest now.
+    //
+    // What counts is the distance of a pair, the least of three hypot()
+    // values. But hypot() and the sum of squares are both correct to
+    // within a few units in the last place, so when the least sum of
+    // squares of one pair is below that of another by more than one part
+    // in a thousand million, far more than that, its distance is
+    // smaller as well, and only pairs that are nearer than that to each
+    // other need hypot() to tell them apart.
     #[cold]
     #[inline(never)]
     fn take(&mut self, i1: usize, i2: usize, between: [(f64, f64, f64); 3]) {
-        let [(x0, y0, square0), (x1, y1, square1), (x2, y2, square2)] = between;
-        let limit = self.limit;
-        // The distance of the pair is the least of the three distances.
-        // Those over the limit are more than `distance` and do not
-        // matter, if there are others.
-        let mut distance = f64::INFINITY;
-        if square0 <= limit {
-            distance = x0.hypot(y0);
+        if self.pair == Some((i1, i2)) {
+            return;
         }
-        if square1 <= limit {
-            let d = x1.hypot(y1);
-            if d < distance {
-                distance = d;
+        let mut square = between[0].2;
+        for &(_, _, this) in &between[1..] {
+            if this < square {
+                square = this;
             }
         }
-        if square2 <= limit {
-            let d = x2.hypot(y2);
-            if d < distance {
-                distance = d;
+        let distance = if self.pair.is_none() || square * (1.0 + 1e-9) < self.square {
+            None
+        } else {
+            let distance = distance_of(&between, square);
+            let closest = match self.distance {
+                Some(closest) => closest,
+                None => {
+                    let closest = distance_of(&self.between, self.square);
+                    self.distance = Some(closest);
+                    closest
+                }
+            };
+            if !(distance < closest || (distance == closest && Some((i1, i2)) > self.pair)) {
+                return;
             }
-        }
-        if distance < self.distance {
-            self.distance = distance;
-            // hypot() and the sum of squares are both correct to within a
-            // few units in the last place; this allows for far more.
-            self.limit = distance * distance * (1.0 + 1e-9);
-            self.pair = Some((i1, i2));
-        } else if distance == self.distance && Some((i1, i2)) > self.pair {
-            self.pair = Some((i1, i2));
-        }
+            Some(distance)
+        };
+        self.pair = Some((i1, i2));
+        self.between = between;
+        self.square = square;
+        self.limit = square * (1.0 + 1e-9);
+        self.distance = distance;
     }
 
     // Look at all pairs of segments of two boxes.
@@ -886,6 +904,23 @@ impl Closest {
             }
         }
     }
+}
+
+// The distance of a pair of segments: the least of the distances between
+// its three pairs of points, `square` being the least of the sums of
+// squares. Two points whose sum of squares is more than a bit above
+// that are not the nearest two.
+fn distance_of(between: &[(f64, f64, f64); 3], square: f64) -> f64 {
+    let mut distance = f64::INFINITY;
+    for &(x, y, this) in between {
+        if this <= square * (1.0 + 1e-9) {
+            let d = x.hypot(y);
+            if d < distance {
+                distance = d;
+            }
+        }
+    }
+    distance
 }
 
 fn line_line_dist(l1: kurbo::Line, l2: kurbo::Line) -> f64 {

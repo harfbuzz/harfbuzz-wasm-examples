@@ -10,7 +10,7 @@ use harfbuzz_wasm::Font;
 // With the Harfbuzz interface, we can choose how we want
 // to represent a glyph. Here we use our own custom glyph
 // representation so we can do clever things with it.
-use glyph::{GlyphShape, GulzarBuffer};
+use glyph::{Collider, GlyphShape, GulzarBuffer};
 
 use wasm_bindgen::prelude::*;
 
@@ -124,8 +124,7 @@ pub fn shape(
             // tail was in units. We're going to then count off
             // each glyph's advance width so we know whether
             // of units we have left within the span of this glyph.
-            let bari_ye_tail: i32 =
-                font.get_glyph_extents(item.codepoint).width - item.x_advance - 20;
+            let bari_ye_tail: i32 = shapes[item.shape].extents(&font).width - item.x_advance - 20;
             bari_ye_counter = Some(bari_ye_tail);
             // and now we start marking glyphs as being above the
             // bari ye.
@@ -255,6 +254,9 @@ pub fn shape(
     // We changed the advances so we should recompute.
     set_total_advance(&mut buffer);
 
+    // From here on we look for glyphs that collide.
+    let mut collider = Collider::new(&buffer.glyphs, &shapes, &font, x_scale);
+
     // Drop dots within bari ye.
     let mut last_bari_ye_ix = 0;
     let mut bari_ye_dots = vec![];
@@ -264,7 +266,7 @@ pub fn shape(
             last_bari_ye_ix = ix;
         } else if item.in_bari_ye  // it's in the bari ye (we computed this earlier)
             && item.is_dot_below() // and it's a dot which collides
-            && item.collides(&buffer.glyphs[last_bari_ye_ix], &shapes, &font)
+            && collider.collides(&buffer.glyphs, ix, last_bari_ye_ix)
         {
             bari_ye_dots.push(ix); // keep a note of it.
         }
@@ -274,8 +276,9 @@ pub fn shape(
     // set its absolute Y offset. You can't do *that* in OpenType!
     for ix in bari_ye_dots {
         let mut item = &mut buffer.glyphs[ix];
-        let extents = font.get_glyph_extents(item.codepoint);
+        let extents = shapes[item.shape].extents(&font);
         item.y_offset = extents.height - (BARI_YE_DOT_POSITION * scale_factor) as i32;
+        collider.moved(ix, item);
     }
 
     // Let's do dot avoidance. Part one, dots below.
@@ -294,7 +297,7 @@ pub fn shape(
                     continue;
                 }
                 // If this dot doesn't collide with something, we're fine.
-                if !buffer.glyphs[i].collides(&buffer.glyphs[j], &shapes, &font) {
+                if !collider.collides(&buffer.glyphs, i, j) {
                     continue;
                 }
                 // If this dot collided with an later dot, lower
@@ -321,6 +324,7 @@ pub fn shape(
         // Otherwise, fix this dot and go check again.
         let to_lower = to_lower.unwrap();
         buffer.glyphs[to_lower].y_offset -= (DOT_AVOIDANCE_DELTA * scale_factor) as i32;
+        collider.moved(to_lower, &buffer.glyphs[to_lower]);
     }
 
     // And this is basically the same thing but looking at
@@ -335,7 +339,7 @@ pub fn shape(
                 if i == j {
                     continue;
                 }
-                if !buffer.glyphs[i].collides(&buffer.glyphs[j], &shapes, &font) {
+                if !collider.collides(&buffer.glyphs, i, j) {
                     continue;
                 }
                 to_raise = Some(i);
@@ -349,6 +353,7 @@ pub fn shape(
         }
         let to_raise = to_raise.unwrap();
         buffer.glyphs[to_raise].y_offset += (50.0 * scale_factor) as i32;
+        collider.moved(to_raise, &buffer.glyphs[to_raise]);
     }
 
     // And we are done. Hand the buffer back to harfbuzz.

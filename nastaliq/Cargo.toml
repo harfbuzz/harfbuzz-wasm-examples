@@ -11,3 +11,10 @@ crate-type = ["cdylib"]
 wasm-bindgen = "0.2.0"
 kurbo = "0.9.0"
 harfbuzz-wasm = { path="../harfbuzz-wasm", features=["kurbo"]}
+
+# The module runs in an interpreter that counts the instructions it runs
+# (wasm-micro-runtime, inside HarfBuzz), so it is built to run few of them,
+# whatever its size.  opt-level 3 is the default here; "s" runs more
+# instructions and "z" many more.
+[profile.release]
+lto = "fat"

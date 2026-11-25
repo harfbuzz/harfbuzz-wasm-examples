@@ -11,8 +11,6 @@ use harfbuzz_wasm::Font;
 // to represent a glyph. Here we use our own custom glyph
 // representation so we can do clever things with it.
 use glyph::{GlyphShape, GulzarBuffer};
-// Getting the outline of a glyph ready, look in outline.rs.
-use outline::get_scaled_outline;
 
 use wasm_bindgen::prelude::*;
 
@@ -39,8 +37,10 @@ fn set_total_advance(buffer: &mut GulzarBuffer) {
 // their paths, and the running total advance, so this routine
 // just gets that information ready in the buffer to help us
 // for later. The names and the paths are the same for every glyph
-// with the same glyph ID, so we get them once for each glyph ID,
-// and return them in a list that the glyphs refer to.
+// with the same glyph ID, so we keep them once for each glyph ID,
+// in a list of shapes that the glyphs refer to. (A shape gets the
+// name here, and the paths when they are first wanted: look in
+// glyph.rs and outline.rs.)
 fn prepare_buffer(buffer: &mut GulzarBuffer, font: &Font) -> Vec<GlyphShape> {
     let mut shapes: Vec<GlyphShape> = vec![];
     // We look every glyph of the buffer up by its glyph ID, so the
@@ -56,8 +56,8 @@ fn prepare_buffer(buffer: &mut GulzarBuffer, font: &Font) -> Vec<GlyphShape> {
             slot &= seen.len() - 1;
             if seen[slot].1 == 0 {
                 shapes.push(GlyphShape::new(
+                    item.codepoint,
                     &font.get_glyph_name(item.codepoint),
-                    get_scaled_outline(font, item.codepoint),
                 ));
                 seen[slot] = (item.codepoint, shapes.len());
             }
@@ -74,10 +74,15 @@ fn prepare_buffer(buffer: &mut GulzarBuffer, font: &Font) -> Vec<GlyphShape> {
 
 // The paths of a glyph of the buffer and where the glyph is, i.e.
 // including the full running-total x advance, for the kerning routine.
-fn placed<'a>(ix: usize, item: &glyph::GulzarGlyph, shapes: &'a [GlyphShape]) -> Placed<'a> {
+fn placed<'a>(
+    ix: usize,
+    item: &glyph::GulzarGlyph,
+    shapes: &'a [GlyphShape],
+    font: &Font,
+) -> Placed<'a> {
     Placed {
         key: ix,
-        paths: &shapes[item.shape].paths,
+        paths: shapes[item.shape].outline(font),
         dx: (item.x_total_advance + item.x_offset) as f64,
         dy: item.y_offset as f64,
     }
@@ -184,8 +189,8 @@ pub fn shape(
 
         // Now we have a left glyph and a right glyph.
         if let Some(to_kern_with) = to_kern_with {
-            let mut left_glyphs = [placed(ix, this_item, &shapes); 3];
-            let other_glyph = placed(to_kern_with, &buffer.glyphs[to_kern_with], &shapes);
+            let mut left_glyphs = [placed(ix, this_item, &shapes, &font); 3];
+            let other_glyph = placed(to_kern_with, &buffer.glyphs[to_kern_with], &shapes, &font);
             // We're actually going to extend those paths with
             // some more context on the left side,
             // to deal with things like بلی - the choti ye is part
@@ -206,7 +211,7 @@ pub fn shape(
                         continue;
                     }
                     counter += 1;
-                    left_glyphs[counter] = placed(next_ix, next, &shapes);
+                    left_glyphs[counter] = placed(next_ix, next, &shapes, &font);
                 } else {
                     break;
                 }

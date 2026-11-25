@@ -1,6 +1,8 @@
+use crate::outline::get_scaled_outline;
 use harfbuzz_wasm::{Buffer, BufferItem, CGlyphInfo, CGlyphPosition, Font};
 use itertools::Itertools;
 use kurbo::{Affine, BezPath, PathEl, PathSeg, Rect};
+use std::cell::OnceCell;
 
 // The kinds of glyph we treat differently. A glyph can be of several kinds.
 pub const DOT_BELOW: u8 = 1 << 0;
@@ -18,14 +20,17 @@ pub const SPACE: u8 = 1 << 6;
 #[derive(Debug)]
 pub struct GlyphShape {
     pub kinds: u8,
-    pub paths: Vec<BezPath>,
+    // Not every glyph gets asked for its outline, so we only get it
+    // from the host the first time somebody does.
+    glyph: u32,
+    outline: OnceCell<Vec<BezPath>>,
 }
 
 impl GlyphShape {
     // These rules will obviously need to be customized
     // for each font, but maybe in a production Nastaliq shaper
     // they would be driven from data in a font table.
-    pub fn new(name: &str, paths: Vec<BezPath>) -> Self {
+    pub fn new(glyph: u32, name: &str) -> Self {
         let mut kinds = 0;
         if name.ends_with("BelowNS") || name.ends_with("HehCommaNS") {
             kinds |= DOT_BELOW;
@@ -48,7 +53,17 @@ impl GlyphShape {
                 _ => {}
             }
         }
-        Self { kinds, paths }
+        Self {
+            kinds,
+            glyph,
+            outline: OnceCell::new(),
+        }
+    }
+
+    // The glyph's outline, scaled up a little.
+    pub fn outline(&self, font: &Font) -> &Vec<BezPath> {
+        self.outline
+            .get_or_init(|| get_scaled_outline(font, self.glyph))
     }
 }
 
@@ -145,8 +160,8 @@ impl GulzarGlyph {
 
     // Similarly, kurbo representations of a glyph's paths
     // positioned absolutely.
-    pub fn positioned_paths(&self, shapes: &[GlyphShape]) -> Vec<BezPath> {
-        let mut paths = shapes[self.shape].paths.clone(); // urgh
+    pub fn positioned_paths(&self, shapes: &[GlyphShape], font: &Font) -> Vec<BezPath> {
+        let mut paths = shapes[self.shape].outline(font).clone(); // urgh
         let affine = Affine::translate((
             (self.x_total_advance + self.x_offset) as f64,
             self.y_offset as f64,
@@ -170,8 +185,8 @@ impl GulzarGlyph {
         }
         let (sx, _sy) = font.get_scale();
 
-        let my_paths = self.positioned_paths(shapes);
-        let their_paths = other.positioned_paths(shapes);
+        let my_paths = self.positioned_paths(shapes, font);
+        let their_paths = other.positioned_paths(shapes, font);
         // We could do line sweep or something here, but proof of concept...
         for p1 in my_paths {
             for p2 in &their_paths {

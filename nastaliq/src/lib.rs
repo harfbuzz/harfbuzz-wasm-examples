@@ -12,7 +12,6 @@ use harfbuzz_wasm::{debug, Font};
 use glyph::{GlyphShape, GulzarBuffer};
 // Kurbo is a library for doing mathematics on bezier curves.
 use kurbo::{Affine, BezPath, Shape};
-use std::collections::BTreeMap;
 
 use wasm_bindgen::prelude::*;
 
@@ -68,15 +67,29 @@ fn set_total_advance(buffer: &mut GulzarBuffer) {
 // and return them in a list that the glyphs refer to.
 fn prepare_buffer(buffer: &mut GulzarBuffer, font: &Font) -> Vec<GlyphShape> {
     let mut shapes: Vec<GlyphShape> = vec![];
-    let mut seen: BTreeMap<u32, usize> = BTreeMap::new();
+    // We look every glyph of the buffer up by its glyph ID, so the
+    // looking up had better be quick: a little hash table of the glyph
+    // IDs we have seen. A slot has a glyph ID and the number of its
+    // shape, counting from one, with zero for a slot nobody has. There
+    // are at least twice as many slots as glyphs, and their number is
+    // a power of two.
+    let mut seen: Vec<(u32, usize)> = vec![(0, 0); (buffer.glyphs.len() * 2).next_power_of_two()];
     for item in buffer.glyphs.iter_mut() {
-        item.shape = *seen.entry(item.codepoint).or_insert_with(|| {
-            shapes.push(GlyphShape::new(
-                font.get_glyph_name(item.codepoint),
-                get_scaled_outline(font, item.codepoint),
-            ));
-            shapes.len() - 1
-        });
+        let mut slot = ((item.codepoint as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 32) as usize;
+        item.shape = loop {
+            slot &= seen.len() - 1;
+            if seen[slot].1 == 0 {
+                shapes.push(GlyphShape::new(
+                    font.get_glyph_name(item.codepoint),
+                    get_scaled_outline(font, item.codepoint),
+                ));
+                seen[slot] = (item.codepoint, shapes.len());
+            }
+            if seen[slot].0 == item.codepoint {
+                break seen[slot].1 - 1;
+            }
+            slot += 1;
+        };
         item.kinds = shapes[item.shape].kinds;
     }
     set_total_advance(buffer);

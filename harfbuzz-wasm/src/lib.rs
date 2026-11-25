@@ -33,7 +33,7 @@ where
 }
 
 #[cfg(feature = "kurbo")]
-use kurbo::BezPath;
+use kurbo::{BezPath, PathEl};
 
 // We don't use #[wasm_bindgen] here because that makes
 // assumptions about Javascript calling conventions. We
@@ -190,42 +190,48 @@ impl Font {
         };
         let points: &[CGlyphOutlinePoint] =
             unsafe { host_slice(outline.points, outline.n_points as usize) };
-        let mut results: Vec<BezPath> = vec![];
+        let mut results: Vec<BezPath> = Vec::with_capacity(end_pts_of_contours.len());
         let mut start_pt: usize = 0;
         for end_pt in end_pts_of_contours {
             let this_contour = &points[start_pt..*end_pt];
             start_pt = *end_pt;
-            let mut path = BezPath::new();
+            // A path element takes one point or more, and there is
+            // one more element to close the path: this is room enough.
+            let mut path: Vec<PathEl> = Vec::with_capacity(this_contour.len() + 1);
             let mut ix = 0;
             while ix < this_contour.len() {
                 let point = &this_contour[ix];
                 match point.pointtype {
-                    PointType::MoveTo => path.move_to((point.x as f64, point.y as f64)),
-                    PointType::LineTo => path.line_to((point.x as f64, point.y as f64)),
+                    PointType::MoveTo => {
+                        path.push(PathEl::MoveTo((point.x as f64, point.y as f64).into()))
+                    }
+                    PointType::LineTo => {
+                        path.push(PathEl::LineTo((point.x as f64, point.y as f64).into()))
+                    }
                     PointType::QuadraticTo => {
                         ix += 1;
                         let end_pt = &this_contour[ix];
-                        path.quad_to(
-                            (point.x as f64, point.y as f64),
-                            (end_pt.x as f64, end_pt.y as f64),
-                        );
+                        path.push(PathEl::QuadTo(
+                            (point.x as f64, point.y as f64).into(),
+                            (end_pt.x as f64, end_pt.y as f64).into(),
+                        ));
                     }
                     PointType::CubicTo => {
                         ix += 1;
                         let mid_pt = &this_contour[ix];
                         ix += 1;
                         let end_pt = &this_contour[ix];
-                        path.curve_to(
-                            (point.x as f64, point.y as f64),
-                            (mid_pt.x as f64, mid_pt.y as f64),
-                            (end_pt.x as f64, end_pt.y as f64),
-                        );
+                        path.push(PathEl::CurveTo(
+                            (point.x as f64, point.y as f64).into(),
+                            (mid_pt.x as f64, mid_pt.y as f64).into(),
+                            (end_pt.x as f64, end_pt.y as f64).into(),
+                        ));
                     }
                 }
                 ix += 1;
             }
-            path.close_path();
-            results.push(path);
+            path.push(PathEl::ClosePath);
+            results.push(BezPath::from_vec(path));
         }
         // The host allocated the points and contours in this instance.
         unsafe { glyph_outline_free(&mut outline) };

@@ -282,10 +282,14 @@ pub fn shape(
     }
 
     // Let's do dot avoidance. Part one, dots below.
+    // Each time we move a dot we have to check again, but not the
+    // whole buffer: the dots from `checked` on were fine the last time
+    // we looked, and nothing near them has moved since.
+    let mut checked = buffer_len;
     loop {
         let mut to_lower: Option<usize> = None;
         // Walk backwards along the buffer, finding dots below
-        for i in (0..buffer_len).rev() {
+        for i in (0..checked).rev() {
             if !buffer.glyphs[i].is_dot_below() {
                 continue;
             }
@@ -325,13 +329,18 @@ pub fn shape(
         let to_lower = to_lower.unwrap();
         buffer.glyphs[to_lower].y_offset -= (DOT_AVOIDANCE_DELTA * scale_factor) as i32;
         collider.moved(to_lower, &buffer.glyphs[to_lower]);
+        // A dot looks at the eight glyphs before it, so the dots which
+        // could now collide with the one we moved are the eight after
+        // it at most. Those after that are still fine.
+        checked = (to_lower + 9).min(buffer_len);
     }
 
     // And this is basically the same thing but looking at
     // dots above.
+    let mut checked = buffer_len;
     loop {
         let mut to_raise: Option<usize> = None;
-        for i in (0..buffer_len).rev() {
+        for i in (0..checked).rev() {
             if !buffer.glyphs[i].is_dot_above() {
                 continue;
             }
@@ -343,6 +352,7 @@ pub fn shape(
                     continue;
                 }
                 to_raise = Some(i);
+                break;
             }
             if to_raise.is_some() {
                 break;
@@ -354,6 +364,8 @@ pub fn shape(
         let to_raise = to_raise.unwrap();
         buffer.glyphs[to_raise].y_offset += (50.0 * scale_factor) as i32;
         collider.moved(to_raise, &buffer.glyphs[to_raise]);
+        // Here a dot looks at the six glyphs before it.
+        checked = (to_raise + 7).min(buffer_len);
     }
 
     // And we are done. Hand the buffer back to harfbuzz.

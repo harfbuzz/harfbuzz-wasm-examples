@@ -231,15 +231,28 @@ fn cross(a: &Segment, b: &Segment) -> bool {
     (0.0..=1.0).contains(&u)
 }
 
+// How far apart in the buffer two glyphs can be for us to remember
+// whether they collide: from NEAR glyphs before to NEAR - 1 after.
+// The dot avoidance loops look no further than that.
+const NEAR: usize = 8;
+
+// What we remember about a pair of glyphs.
+const NOT_ASKED: u8 = 0;
+const APART: u8 = 1;
+const COLLIDING: u8 = 2;
+
 // Collision detector for the glyphs of a buffer. Still terribly
-// inefficient, but it remembers the bounding box of every glyph
-// until the glyph moves (tell it with moved()).
+// inefficient, but it remembers what it has worked out until a glyph
+// moves (tell it with moved()): the bounding box of every glyph and
+// whether a glyph collides with each of those near it.
 pub struct Collider<'a> {
     shapes: &'a [GlyphShape],
     font: &'a Font,
     // How finely to flatten the outlines.
     tolerance: f64,
     bounds: Vec<Bounds>,
+    // For each glyph, 2 * NEAR answers: one for each glyph near it.
+    answers: Vec<u8>,
     // The segments of the two glyphs being tested.
     mine: Vec<Segment>,
     theirs: Vec<Segment>,
@@ -256,6 +269,7 @@ impl<'a> Collider<'a> {
                 .iter()
                 .map(|glyph| Bounds::of(glyph, shapes[glyph.shape].extents(font)))
                 .collect(),
+            answers: vec![NOT_ASKED; glyphs.len() * 2 * NEAR],
             mine: vec![],
             theirs: vec![],
             points: vec![],
@@ -265,6 +279,14 @@ impl<'a> Collider<'a> {
     // Glyph number `ix` of the buffer has changed position.
     pub fn moved(&mut self, ix: usize, glyph: &GulzarGlyph) {
         self.bounds[ix] = Bounds::of(glyph, self.shapes[glyph.shape].extents(self.font));
+        // Forget what we said about it and the glyphs near it...
+        self.answers[ix * 2 * NEAR..(ix + 1) * 2 * NEAR].fill(NOT_ASKED);
+        // ...and what we said about the glyphs it is near to and it.
+        let first = ix.saturating_sub(NEAR - 1);
+        let end = (ix + NEAR + 1).min(self.bounds.len());
+        for other in first..end {
+            self.answers[other * 2 * NEAR + (ix + NEAR - other)] = NOT_ASKED;
+        }
     }
 
     // Do glyphs number `i` and `j` of the buffer collide?
@@ -285,6 +307,25 @@ impl<'a> Collider<'a> {
 
     // Do the outlines of glyphs number `i` and `j` cross?
     fn outlines_cross(&mut self, glyphs: &[GulzarGlyph], i: usize, j: usize) -> bool {
+        // If `j` is near `i`, we may have looked already, and if
+        // we haven't, we will have the next time.
+        let near = (j + NEAR).wrapping_sub(i);
+        if near >= 2 * NEAR {
+            return self.test(glyphs, i, j);
+        }
+        let answer = i * 2 * NEAR + near;
+        if self.answers[answer] == NOT_ASKED {
+            self.answers[answer] = if self.test(glyphs, i, j) {
+                COLLIDING
+            } else {
+                APART
+            };
+        }
+        self.answers[answer] == COLLIDING
+    }
+
+    // Look at the outlines of glyphs number `i` and `j`: do they cross?
+    fn test(&mut self, glyphs: &[GulzarGlyph], i: usize, j: usize) -> bool {
         let (me, them) = (&glyphs[i], &glyphs[j]);
         // Where the two glyphs are.
         let my_place = (

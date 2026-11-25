@@ -10,49 +10,82 @@ use kurbo::{BezPath, CubicBez, Line, ParamCurve, ParamCurveNearest, PathEl, Path
 // and one for the right hand side, work out how many units to
 // kern so that these paths are `target_distance` units apart.
 
-pub fn determine_kern(
-    left_paths: &[BezPath],
-    right_paths: &[BezPath],
-    target_distance: f32,
-    max_tuck: f32,
-    scale_factor: f32,
-) -> f32 {
-    // The left paths stay where they are, so take their segments, and
-    // the points we compare segments by, once. We're going to slide the
-    // right paths around until they fit, so keep their segments apart.
-    let mut left = Segments::new(left_paths);
-    left.sample();
-    let mut right = Segments::new(right_paths);
-    let mut pairs = vec![PathPair::default(); left.ends.len() * right.ends.len()];
+// The paths of a glyph, and how far the glyph is moved from where its
+// paths are.
+#[derive(Clone, Copy)]
+pub struct Placed<'a> {
+    pub paths: &'a [BezPath],
+    pub dx: f64,
+    pub dy: f64,
+}
 
-    let mut minimum_possible = -1000.0 * scale_factor;
-    let mut iterations = 0;
-    let mut kern = 0.0;
-    // This should probably be an Option<f32>: None or something
-    // but like I said, hurry.`
-    let mut min_distance = -9999.0;
+// What determine_kern() works with. It is kept from one call to the
+// next so that the memory is there already.
+#[derive(Default)]
+pub struct Kerner {
+    left: Segments,
+    right: Segments,
+    pairs: Vec<PathPair>,
+}
 
-    // Move them around up to ten times to get them within a target distance.
-    while iterations < 10 && (target_distance - min_distance).abs() > 10.0 {
-        // Work out how far they are away at closest point, work out the
-        // kern, move the right hand paths and iterate.
-        right.sample();
-        if let Some(md) = path_distance(&left, &right, &mut pairs) {
-            min_distance = md;
-            let this_kern = target_distance - min_distance;
-            kern += this_kern;
-            if kern < minimum_possible {
+impl Kerner {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    // The left hand side is the paths of all the `left` glyphs, in that
+    // order.
+    pub fn determine_kern(
+        &mut self,
+        left: &[Placed],
+        right: &Placed,
+        target_distance: f32,
+        max_tuck: f32,
+        scale_factor: f32,
+    ) -> f32 {
+        // The left paths stay where they are, so take their segments, and
+        // the points we compare segments by, once. We're going to slide
+        // the right paths around until they fit.
+        let (left_glyphs, right_glyph) = (left, right);
+        let (left, right, pairs) = (&mut self.left, &mut self.right, &mut self.pairs);
+        left.clear();
+        for glyph in left_glyphs {
+            left.add_glyph(glyph);
+        }
+        right.clear();
+        right.add_glyph(right_glyph);
+        pairs.clear();
+        pairs.resize(left.paths.len() * right.paths.len(), PathPair::default());
+
+        let mut minimum_possible = -1000.0 * scale_factor;
+        let mut iterations = 0;
+        let mut kern = 0.0;
+        // This should probably be an Option<f32>: None or something
+        // but like I said, hurry.`
+        let mut min_distance = -9999.0;
+
+        // Move them around up to ten times to get them within a target distance.
+        while iterations < 10 && (target_distance - min_distance).abs() > 10.0 {
+            // Work out how far they are away at closest point, work out the
+            // kern, move the right hand paths and iterate.
+            right.settle();
+            if let Some(md) = path_distance(left, right, pairs) {
+                min_distance = md;
+                let this_kern = target_distance - min_distance;
+                kern += this_kern;
+                if kern < minimum_possible {
+                    return minimum_possible;
+                }
+
+                // debug(&format!("Moving right paths another {:}", this_kern));
+                right.move_by(this_kern as f64);
+                iterations += 1;
+            } else {
                 return minimum_possible;
             }
-
-            // debug(&format!("Moving right paths another {:}", this_kern));
-            right.move_by(this_kern as f64);
-            iterations += 1;
-        } else {
-            return minimum_possible;
         }
+        kern
     }
-    kern
 }
 
 // How many segments of a path share a box.
@@ -62,38 +95,16 @@ const BOXED: usize = 4;
 // and the greatest y.
 type PointBox = [f64; 4];
 
-const EMPTY_BOX: PointBox = [
-    f64::INFINITY,
-    f64::NEG_INFINITY,
-    f64::INFINITY,
-    f64::NEG_INFINITY,
-];
-
-#[inline(always)]
-fn add_to_box(around: &mut PointBox, p: Point) {
-    if p.x < around[0] {
-        around[0] = p.x;
-    }
-    if p.x > around[1] {
-        around[1] = p.x;
-    }
-    if p.y < around[2] {
-        around[2] = p.y;
-    }
-    if p.y > around[3] {
-        around[3] = p.y;
-    }
-}
-
-// The segments of some paths, and the three points on each segment that
-// segments are first compared by.
+// The segments of the paths of some glyphs where the glyphs are, and
+// the three points on each segment that segments are first compared by.
+#[derive(Default)]
 struct Segments {
     // The segments of all the paths, one path after the other.
     segs: Vec<PathSeg>,
-    // Where the segments of each path end in `segs`.
-    ends: Vec<usize>,
     // The segments that close a subpath. There are hardly ever any.
     closers: Vec<usize>,
+    // Whether there is a cubic segment.
+    cubics: bool,
     // How far the segments still have to be moved along x.
     pending: Option<f64>,
     // The start, middle and end of each segment.
@@ -101,162 +112,241 @@ struct Segments {
     // A box around the points of every BOXED segments of a path: the
     // boxes of the first path, then those of the second, and so on.
     boxes: Vec<PointBox>,
-    // The segments and boxes of each path.
-    paths: Vec<PathRange>,
-    // A box around all the control points of each path.
-    around: Vec<PointBox>,
-    // Whether there is a cubic segment.
-    cubics: bool,
+    paths: Vec<Path>,
 }
 
-// The segments of one path, and the boxes around their points.
+// One path: which segments and boxes are its own, and the box around
+// all its control points.
 #[derive(Clone)]
-struct PathRange {
+struct Path {
     segs: Range<usize>,
     boxes: Range<usize>,
+    around: PointBox,
 }
 
 impl Segments {
-    fn new(paths: &[BezPath]) -> Self {
-        let mut this = Segments {
-            segs: vec![],
-            ends: Vec::with_capacity(paths.len()),
-            closers: vec![],
-            pending: None,
-            points: vec![],
-            boxes: vec![],
-            paths: Vec::with_capacity(paths.len()),
-            around: Vec::with_capacity(paths.len()),
-            cubics: false,
-        };
-        for path in paths {
-            let start = this.segs.len();
-            this.add_path(path);
-            this.ends.push(this.segs.len());
-            let mut around = EMPTY_BOX;
-            for seg in &this.segs[start..] {
-                match seg {
-                    PathSeg::Line(l) => {
-                        add_to_box(&mut around, l.p0);
-                        add_to_box(&mut around, l.p1);
-                    }
-                    PathSeg::Quad(q) => {
-                        add_to_box(&mut around, q.p0);
-                        add_to_box(&mut around, q.p1);
-                        add_to_box(&mut around, q.p2);
-                    }
-                    PathSeg::Cubic(_) => this.cubics = true,
-                }
-            }
-            this.around.push(around);
-        }
-        this
+    fn clear(&mut self) {
+        self.segs.clear();
+        self.closers.clear();
+        self.cubics = false;
+        self.pending = None;
+        self.points.clear();
+        self.boxes.clear();
+        self.paths.clear();
     }
 
-    // Add the segments of a path, the ones BezPath::segments() gives.
-    // We need to know which of them close a subpath, though: such a
-    // segment is only there while the subpath's two ends differ, and
-    // moving the path can make them the same point.
-    fn add_path(&mut self, path: &BezPath) {
-        let mut start_last: Option<(Point, Point)> = None;
-        for &el in path.elements() {
-            let (start, last) = start_last.get_or_insert_with(|| {
-                let point = match el {
-                    PathEl::MoveTo(p) => p,
-                    PathEl::LineTo(p) => p,
-                    PathEl::QuadTo(_, p2) => p2,
-                    PathEl::CurveTo(_, _, p3) => p3,
-                    PathEl::ClosePath => Point::ZERO,
-                };
-                (point, point)
-            });
-            let seg = match el {
+    // Add the paths of a glyph, where the glyph is.
+    fn add_glyph(&mut self, glyph: &Placed) {
+        for path in glyph.paths {
+            self.add_path(path, glyph.dx, glyph.dy);
+        }
+    }
+
+    // Add a path moved by (dx, dy): its segments, their points and the
+    // boxes around those.
+    //
+    // The segments are the ones that BezPath::segments() gives for the
+    // moved path. We need to know which of them close a subpath,
+    // though: such a segment is only there while the subpath's two ends
+    // differ, and moving the path can make them the same point.
+    fn add_path(&mut self, path: &BezPath, dx: f64, dy: f64) {
+        let first_seg = self.segs.len();
+        let first_box = self.boxes.len();
+        // What Affine::translate((dx, dy)) does to a point.
+        let moved = |p: Point| Point::new(p.x + dx, p.y + dy);
+        // The box around the points of the last few segments, and how
+        // many segments those are.
+        let mut around = SmallBox::new();
+        let mut boxed = 0;
+        // The box around the control points that are not also points
+        // the segments are compared by.
+        let mut others = SmallBox::new();
+        // Where the subpath started and where the last segment ended,
+        // once there has been a path element.
+        let mut start = Point::ZERO;
+        let mut last = Point::ZERO;
+        let mut begun = false;
+        for el in path.elements() {
+            let points = match *el {
                 PathEl::MoveTo(p) => {
-                    *start = p;
-                    *last = p;
+                    start = moved(p);
+                    last = start;
+                    begun = true;
                     continue;
                 }
-                PathEl::LineTo(p) => PathSeg::Line(Line::new(core::mem::replace(last, p), p)),
+                PathEl::LineTo(p) => {
+                    let p = moved(p);
+                    if !begun {
+                        (start, last, begun) = (p, p, true);
+                    }
+                    let l = Line::new(core::mem::replace(&mut last, p), p);
+                    others.add(l.p0);
+                    others.add(l.p1);
+                    self.segs.push(PathSeg::Line(l));
+                    [l.eval(0.0), l.eval(0.5), l.eval(1.0)]
+                }
                 PathEl::QuadTo(p1, p2) => {
-                    PathSeg::Quad(QuadBez::new(core::mem::replace(last, p2), p1, p2))
+                    let (p1, p2) = (moved(p1), moved(p2));
+                    if !begun {
+                        (start, last, begun) = (p2, p2, true);
+                    }
+                    let q = QuadBez::new(core::mem::replace(&mut last, p2), p1, p2);
+                    others.add(p1);
+                    self.segs.push(PathSeg::Quad(q));
+                    // The first and the last control point of a
+                    // quadratic are what QuadBez::eval() gives at 0 and
+                    // at 1: there it adds the other points times zero to
+                    // that one times one.
+                    [q.p0, q.eval(0.5), q.p2]
                 }
                 PathEl::CurveTo(p1, p2, p3) => {
-                    PathSeg::Cubic(CubicBez::new(core::mem::replace(last, p3), p1, p2, p3))
+                    let (p1, p2, p3) = (moved(p1), moved(p2), moved(p3));
+                    if !begun {
+                        (start, last, begun) = (p3, p3, true);
+                    }
+                    let c = CubicBez::new(core::mem::replace(&mut last, p3), p1, p2, p3);
+                    self.cubics = true;
+                    self.segs.push(PathSeg::Cubic(c));
+                    [c.eval(0.0), c.eval(0.5), c.eval(1.0)]
                 }
                 PathEl::ClosePath => {
-                    if *last != *start {
-                        self.closers.push(self.segs.len());
-                        PathSeg::Line(Line::new(core::mem::replace(last, *start), *start))
-                    } else {
+                    if !begun || last == start {
                         continue;
                     }
+                    let l = Line::new(core::mem::replace(&mut last, start), start);
+                    others.add(l.p0);
+                    others.add(l.p1);
+                    self.closers.push(self.segs.len());
+                    self.segs.push(PathSeg::Line(l));
+                    [l.eval(0.0), l.eval(0.5), l.eval(1.0)]
                 }
             };
-            self.segs.push(seg);
+            self.points.push(points);
+            around.add(points[0]);
+            around.add(points[1]);
+            around.add(points[2]);
+            boxed += 1;
+            if boxed == BOXED {
+                self.boxes.push(around.get());
+                around = SmallBox::new();
+                boxed = 0;
+            }
         }
+        if boxed > 0 {
+            self.boxes.push(around.get());
+        }
+        // All the control points are in one of these boxes.
+        for around in &self.boxes[first_box..] {
+            others.add(Point::new(around[0], around[2]));
+            others.add(Point::new(around[1], around[3]));
+        }
+        self.paths.push(Path {
+            segs: first_seg..self.segs.len(),
+            boxes: first_box..self.boxes.len(),
+            around: others.get(),
+        });
     }
 
-    // Move the segments along x, the next time they are sampled.
+    // Move the segments along x, when they are needed again.
     fn move_by(&mut self, dx: f64) {
         self.pending = Some(dx);
     }
 
-    // Work out the points the segments are compared by, having moved the
-    // segments first if they were asked to.
-    fn sample(&mut self) {
-        if let Some(dx) = self.pending.take() {
-            // This is what applying Affine::translate((dx, 0.0)) to the
-            // paths gives: x + dx, and y as it was.
-            for seg in self.segs.iter_mut() {
-                match seg {
-                    PathSeg::Line(l) => {
-                        l.p0.x += dx;
-                        l.p1.x += dx;
-                    }
-                    PathSeg::Quad(q) => {
-                        q.p0.x += dx;
-                        q.p1.x += dx;
-                        q.p2.x += dx;
-                    }
-                    PathSeg::Cubic(c) => {
-                        c.p0.x += dx;
-                        c.p1.x += dx;
-                        c.p2.x += dx;
-                        c.p3.x += dx;
-                    }
-                }
-            }
-            self.drop_closed();
-            // Adding to the least and to the greatest x of the points
-            // gives the least and the greatest x of the moved points.
-            for around in self.around.iter_mut() {
-                around[0] += dx;
-                around[1] += dx;
-            }
+    // Move the segments if they were asked to, and with them their
+    // points and boxes. Only x changes.
+    fn settle(&mut self) {
+        let Some(dx) = self.pending.take() else {
+            return;
+        };
+        if !self.closers.is_empty() {
+            return self.settle_all(dx);
         }
-        self.points.clear();
-        self.points.extend(self.segs.iter().map(|seg| match seg {
-            PathSeg::Line(l) => [l.eval(0.0), l.eval(0.5), l.eval(1.0)],
-            PathSeg::Quad(q) => [q.eval(0.0), q.eval(0.5), q.eval(1.0)],
-            PathSeg::Cubic(c) => [c.eval(0.0), c.eval(0.5), c.eval(1.0)],
-        }));
-        self.boxes.clear();
-        self.paths.clear();
-        let mut start = 0;
-        for &end in &self.ends {
-            let box_start = self.boxes.len();
-            for points in self.points[start..end].chunks(BOXED) {
-                let mut around = EMPTY_BOX;
-                for &p in points.iter().flatten() {
-                    add_to_box(&mut around, p);
+        for path in self.paths.iter_mut() {
+            let segs = self.segs[path.segs.clone()].chunks_mut(BOXED);
+            let points = self.points[path.segs.clone()].chunks_mut(BOXED);
+            let boxes = self.boxes[path.boxes.clone()].iter_mut();
+            for ((segs, points), around) in segs.zip(points).zip(boxes) {
+                let (mut least, mut greatest) = (f64::INFINITY, f64::NEG_INFINITY);
+                for (seg, points) in segs.iter_mut().zip(points.iter_mut()) {
+                    // This is what applying Affine::translate((dx, 0.0))
+                    // to the paths gives: x + dx, and y as it was.
+                    match seg {
+                        PathSeg::Line(l) => {
+                            l.p0.x += dx;
+                            l.p1.x += dx;
+                            *points = [l.eval(0.0), l.eval(0.5), l.eval(1.0)];
+                        }
+                        PathSeg::Quad(q) => {
+                            q.p0.x += dx;
+                            q.p1.x += dx;
+                            q.p2.x += dx;
+                            points[0].x = q.p0.x;
+                            points[1].x = q.eval(0.5).x;
+                            points[2].x = q.p2.x;
+                        }
+                        PathSeg::Cubic(c) => {
+                            c.p0.x += dx;
+                            c.p1.x += dx;
+                            c.p2.x += dx;
+                            c.p3.x += dx;
+                            *points = [c.eval(0.0), c.eval(0.5), c.eval(1.0)];
+                        }
+                    }
+                    for p in points.iter() {
+                        if p.x < least {
+                            least = p.x;
+                        }
+                        if p.x > greatest {
+                            greatest = p.x;
+                        }
+                    }
                 }
-                self.boxes.push(around);
+                around[0] = least;
+                around[1] = greatest;
             }
-            self.paths.push(PathRange {
-                segs: start..end,
-                boxes: box_start..self.boxes.len(),
-            });
-            start = end;
+            // Adding to the least and to the greatest x of some points
+            // gives the least and the greatest x of the moved points.
+            path.around[0] += dx;
+            path.around[1] += dx;
+        }
+    }
+
+    // The same when there are segments that may have to go.
+    fn settle_all(&mut self, dx: f64) {
+        for (seg, points) in self.segs.iter_mut().zip(self.points.iter_mut()) {
+            match seg {
+                PathSeg::Line(l) => {
+                    l.p0.x += dx;
+                    l.p1.x += dx;
+                }
+                PathSeg::Quad(q) => {
+                    q.p0.x += dx;
+                    q.p1.x += dx;
+                    q.p2.x += dx;
+                }
+                PathSeg::Cubic(c) => {
+                    c.p0.x += dx;
+                    c.p1.x += dx;
+                    c.p2.x += dx;
+                    c.p3.x += dx;
+                }
+            }
+            *points = sample(seg);
+        }
+        self.drop_closed();
+        self.boxes.clear();
+        for path in self.paths.iter_mut() {
+            let first_box = self.boxes.len();
+            for points in self.points[path.segs.clone()].chunks(BOXED) {
+                let mut around = SmallBox::new();
+                for &p in points.iter().flatten() {
+                    around.add(p);
+                }
+                self.boxes.push(around.get());
+            }
+            path.boxes = first_box..self.boxes.len();
+            path.around[0] += dx;
+            path.around[1] += dx;
         }
     }
 
@@ -275,16 +365,66 @@ impl Segments {
                 }
             }
             self.segs.remove(ix);
+            self.points.remove(ix);
             self.closers.remove(k);
             for closer in self.closers[k..].iter_mut() {
                 *closer -= 1;
             }
-            for end in self.ends.iter_mut() {
-                if *end > ix {
-                    *end -= 1;
+            for path in self.paths.iter_mut() {
+                if path.segs.start > ix {
+                    path.segs.start -= 1;
+                }
+                if path.segs.end > ix {
+                    path.segs.end -= 1;
                 }
             }
         }
+    }
+}
+
+// A box around some points, while it is being worked out.
+struct SmallBox {
+    x0: f64,
+    x1: f64,
+    y0: f64,
+    y1: f64,
+}
+
+impl SmallBox {
+    #[inline(always)]
+    fn new() -> Self {
+        SmallBox {
+            x0: f64::INFINITY,
+            x1: f64::NEG_INFINITY,
+            y0: f64::INFINITY,
+            y1: f64::NEG_INFINITY,
+        }
+    }
+
+    #[inline(always)]
+    fn add(&mut self, p: Point) {
+        self.x0 = if p.x < self.x0 { p.x } else { self.x0 };
+        self.x1 = if p.x > self.x1 { p.x } else { self.x1 };
+        self.y0 = if p.y < self.y0 { p.y } else { self.y0 };
+        self.y1 = if p.y > self.y1 { p.y } else { self.y1 };
+    }
+
+    #[inline(always)]
+    fn get(&self) -> PointBox {
+        [self.x0, self.x1, self.y0, self.y1]
+    }
+}
+
+// The start, middle and end of a segment: eval() at 0, 0.5 and 1.
+#[inline(always)]
+fn sample(seg: &PathSeg) -> [Point; 3] {
+    match seg {
+        PathSeg::Line(l) => [l.eval(0.0), l.eval(0.5), l.eval(1.0)],
+        // The first and the last control point of a quadratic are what
+        // QuadBez::eval() gives at 0 and at 1: there it adds the other
+        // points times zero to that one times one.
+        PathSeg::Quad(q) => [q.p0, q.eval(0.5), q.p2],
+        PathSeg::Cubic(c) => [c.eval(0.0), c.eval(0.5), c.eval(1.0)],
     }
 }
 
@@ -313,14 +453,14 @@ fn path_distance(left: &Segments, right: &Segments, pairs: &mut [PathPair]) -> O
     let mut nearest = 0;
     let mut least = f64::INFINITY;
     let mut all = pairs.iter_mut().enumerate();
-    for box1 in &left.around {
-        for box2 in &right.around {
+    for path1 in &left.paths {
+        for path2 in &right.paths {
             if let Some((k, pair)) = all.next() {
                 pair.apart = if left.cubics || right.cubics {
                     // Cubics are not measured at all, see below.
                     f64::NEG_INFINITY
                 } else {
-                    at_least_apart(box1, box2)
+                    at_least_apart(&path1.around, &path2.around)
                 };
                 if pair.apart < least {
                     least = pair.apart;
@@ -404,9 +544,9 @@ fn farther(apart: f64, distance: f64) -> bool {
 // have been compared before, and becomes the pair it is now.
 fn min_distance_bezpath(
     one: &Segments,
-    path1: &PathRange,
+    path1: &Path,
     other: &Segments,
-    path2: &PathRange,
+    path2: &Path,
     hint: &mut Option<(usize, usize)>,
 ) -> f64 {
     *hint = closest_segments(one, path1, other, path2, *hint);
@@ -451,9 +591,9 @@ fn min_distance_bezpath(
 // than the best pair, so that it could neither win nor tie.
 fn closest_segments(
     one: &Segments,
-    path1: &PathRange,
+    path1: &Path,
     other: &Segments,
-    path2: &PathRange,
+    path2: &Path,
     hint: Option<(usize, usize)>,
 ) -> Option<(usize, usize)> {
     let points1 = &one.points[path1.segs.clone()];

@@ -3,7 +3,7 @@ mod glyph;
 mod mindist;
 
 // Auto-kerning routine, look in dist.rs for this.
-use dist::determine_kern;
+use dist::{Kerner, Placed};
 // Routines for interfacing with Harfbuzz
 use harfbuzz_wasm::{debug, Font};
 // With the Harfbuzz interface, we can choose how we want
@@ -76,6 +76,16 @@ fn prepare_buffer(buffer: &mut GulzarBuffer, font: &Font) {
             .clone(); // This clone is bad code, I know.
     }
     set_total_advance(buffer)
+}
+
+// The paths of a glyph and where the glyph is, i.e. including the
+// full running-total x advance, for the kerning routine.
+fn placed(item: &glyph::GulzarGlyph) -> Placed<'_> {
+    Placed {
+        paths: &item.paths,
+        dx: (item.x_total_advance + item.x_offset) as f64,
+        dy: item.y_offset as f64,
+    }
 }
 
 #[wasm_bindgen]
@@ -153,6 +163,7 @@ pub fn shape(
 
     let buffer_len = buffer.glyphs.len();
     let mut kerns = vec![];
+    let mut kerner = Kerner::new();
 
     for ix in 0..buffer_len {
         let this_item = &buffer.glyphs[ix];
@@ -182,8 +193,8 @@ pub fn shape(
 
         // Now we have a left glyph and a right glyph.
         if let Some(to_kern_with) = to_kern_with {
-            let mut left_paths = this_item.positioned_paths();
-            let other_paths = &buffer.glyphs[to_kern_with].positioned_paths();
+            let mut left_glyphs = [placed(this_item); 3];
+            let other_glyph = placed(&buffer.glyphs[to_kern_with]);
             // We're actually going to extend those paths with
             // some more context on the left side,
             // to deal with things like بلی - the choti ye is part
@@ -202,21 +213,24 @@ pub fn shape(
                     if next.is_dot_below() || next.is_dot_above() {
                         continue;
                     }
-                    left_paths.extend_from_slice(&next.positioned_paths());
                     counter += 1;
+                    left_glyphs[counter] = placed(next);
                 } else {
                     break;
                 }
             }
-            if left_paths.is_empty() || other_paths.is_empty() {
+            let left_glyphs = &left_glyphs[..=counter];
+            if left_glyphs.iter().all(|glyph| glyph.paths.is_empty())
+                || other_glyph.paths.is_empty()
+            {
                 continue;
             }
 
             // OK, we found everything we want. Work out the
             // kern. If we saw a space, loosen things a little.
-            let kern_required = determine_kern(
-                &left_paths,
-                other_paths,
+            let kern_required = kerner.determine_kern(
+                left_glyphs,
+                &other_glyph,
                 KERN_DISTANCE * scale_factor,
                 0.0,
                 scale_factor,

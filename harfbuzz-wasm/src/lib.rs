@@ -50,8 +50,10 @@ extern "C" {
     fn font_get_glyph_h_advance(font: u32, glyph: u32) -> i32;
     fn font_get_glyph_v_advance(font: u32, glyph: u32) -> i32;
     fn font_copy_glyph_outline(font: u32, glyph: u32, outline: *mut CGlyphOutline) -> bool;
+    fn glyph_outline_free(outline: *mut CGlyphOutline);
     fn face_copy_table(font: u32, tag: u32, blob: *mut Blob) -> bool;
     fn buffer_copy_contents(buffer: u32, cbuffer: *mut CBufferContents) -> bool;
+    fn buffer_contents_free(cbuffer: *mut CBufferContents);
     fn buffer_set_contents(buffer: u32, cbuffer: &CBufferContents) -> bool;
     fn font_copy_coords(font: u32, coords: *mut CCoords) -> bool;
     fn font_set_coords(font: u32, coords: &CCoords) -> bool;
@@ -212,6 +214,8 @@ impl Font {
             path.close_path();
             results.push(path);
         }
+        // The host allocated the points and contours in this instance.
+        unsafe { glyph_outline_free(&mut outline) };
         results
     }
 
@@ -323,6 +327,8 @@ impl<T: BufferItem> Buffer<T> {
         let infos: Vec<CGlyphInfo> = unsafe {
             std::slice::from_raw_parts(c_contents.info, c_contents.length as usize).to_vec()
         };
+        // The host allocated the two arrays in this instance.
+        unsafe { buffer_contents_free(&mut c_contents) };
         Buffer {
             glyphs: infos
                 .into_iter()
